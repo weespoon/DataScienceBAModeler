@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,12 +37,50 @@ EVENTS: tuple[str, ...] = (
     "note",
 )
 
+#: Severity, least to most urgent. This is the channel split: `debug` is the
+#: play-by-play nobody reads twice, `info` is the progress you glance at,
+#: `decision` and `error` are the things that need a person.
+LEVELS: tuple[str, ...] = ("debug", "info", "decision", "error")
+
+#: Default severity per event kind, so callers get it right by not thinking
+#: about it. `refused` is never below `decision`: a tripwire that fired is
+#: exactly the thing a human must see.
+DEFAULT_LEVEL: dict[str, str] = {
+    "step_started": "debug",
+    "step_finished": "info",
+    "step_skipped": "info",
+    "step_failed": "error",
+    "decision": "decision",
+    "refused": "decision",
+    "note": "info",
+}
+
+#: Generated once per process. An ad-hoc single-step run genuinely is its own
+#: pass; only `make loop` has reason to span several processes, and it does that
+#: by exporting TITANIC_PASS_ID.
+_PROCESS_PASS_ID = f"adhoc-{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:4]}"
+
+#: Environment variable `make loop` sets so one iteration shares an id.
+PASS_ID_ENV = "TITANIC_PASS_ID"
+
+
+def current_pass_id() -> str:
+    """The id grouping one loop iteration across its separate processes.
+
+    ``make loop`` runs explore, tune and ensemble as three python invocations.
+    Without a shared id, "what did pass 2 do?" is unanswerable — which is why
+    there is no per-run report yet. This is the enabler for one.
+    """
+    return os.environ.get(PASS_ID_ENV) or _PROCESS_PASS_ID
+
 
 def record(
     event: str,
     *,
     step: str = "",
     detail: str = "",
+    level: str | None = None,
+    pass_id: str | None = None,
     path: Path | None = None,
     **fields: Any,
 ) -> dict[str, Any]:
@@ -52,6 +91,8 @@ def record(
             rejected — losing the entry would be worse than an odd label.
         step: Pipeline step the entry belongs to.
         detail: One line of human-readable context.
+        level: Severity; defaults from :data:`DEFAULT_LEVEL` for the event kind.
+        pass_id: Groups one loop iteration; defaults to :func:`current_pass_id`.
         path: Journal to append to; defaults to ``experiments/run_log.jsonl``.
         **fields: Anything else worth keeping, serialised as-is.
 
@@ -65,6 +106,8 @@ def record(
     entry: dict[str, Any] = {
         "timestamp_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "event": event,
+        "level": level or DEFAULT_LEVEL.get(event, "info"),
+        "pass_id": pass_id or current_pass_id(),
         "step": step,
         "detail": detail.replace("\n", " ").strip(),
         "pid": os.getpid(),
@@ -108,24 +151,54 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show the agent run journal.")
     parser.add_argument("--event", default=None, help="filter to one event kind")
     parser.add_argument("--step", default=None, help="filter to one pipeline step")
+    parser.add_argument("--pass-id", default=None, help="filter to one loop iteration")
+    parser.add_argument(
+        "--level",
+        default="info",
+        choices=LEVELS,
+        help="minimum severity to show (default: info)",
+    )
+    parser.add_argument("--all", action="store_true", help="show everything, including debug")
+    parser.add_argument("--decisions", action="store_true", help="only what needed a person")
     parser.add_argument("--tail", type=int, default=0, help="show only the last N entries")
     args = parser.parse_args(argv)
 
-    entries = read_journal()
+    minimum = "debug" if args.all else ("decision" if args.decisions else args.level)
+    floor = LEVELS.index(minimum)
+
+    def rank(entry: dict[str, Any]) -> int:
+        """Severity rank; an unrecognised level sorts as `info` rather than crashing."""
+        level = str(entry.get("level", "info"))
+        return LEVELS.index(level) if level in LEVELS else LEVELS.index("info")
+
+    all_entries = read_journal()
+    if not all_entries:
+        print(f"no journal entries yet ({paths.RUN_LOG})")
+        return 0
+
+    entries = [e for e in all_entries if rank(e) >= floor]
     if args.event:
         entries = [e for e in entries if e.get("event") == args.event]
     if args.step:
         entries = [e for e in entries if e.get("step") == args.step]
+    if args.pass_id:
+        entries = [e for e in entries if e.get("pass_id") == args.pass_id]
     if args.tail:
         entries = entries[-args.tail :]
 
     if not entries:
-        print(f"no journal entries yet ({paths.RUN_LOG})")
+        # Distinguish "the journal is empty" from "everything is quieter than
+        # this" — the second should say so, and name the way to see it.
+        print(
+            f"nothing at level {minimum} or above; "
+            f"{len(all_entries)} quieter entry(s) exist. Use --all to see them."
+        )
         return 0
     for entry in entries:
         print(
-            f"{entry.get('timestamp_utc', '?')}  {entry.get('event', '?'):<14}"
-            f"{entry.get('step', ''):<10} {entry.get('detail', '')}"
+            f"{entry.get('timestamp_utc', '?')}  {str(entry.get('level', '?')).upper():<9}"
+            f"{entry.get('event', '?'):<14}{entry.get('step', ''):<10} "
+            f"{entry.get('detail', '')}"
         )
     return 0
 

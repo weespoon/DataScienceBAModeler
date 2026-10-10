@@ -106,3 +106,87 @@ def test_main_on_an_empty_journal(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "nope.jsonl")
     assert run_log.main([]) == 0
     assert "no journal entries yet" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# severity levels and pass grouping
+# --------------------------------------------------------------------------- #
+
+
+def test_levels_run_least_to_most_urgent() -> None:
+    assert run_log.LEVELS == ("debug", "info", "decision", "error")
+
+
+def test_every_event_kind_has_a_default_level() -> None:
+    assert set(run_log.EVENTS) <= set(run_log.DEFAULT_LEVEL)
+
+
+def test_a_refusal_is_never_below_decision() -> None:
+    # A tripwire that fired is exactly the thing a human must see, so it must
+    # not be filterable out by the default view.
+    for event in ("refused", "step_failed"):
+        level = run_log.DEFAULT_LEVEL[event]
+        assert run_log.LEVELS.index(level) >= run_log.LEVELS.index("decision"), event
+
+
+def test_the_play_by_play_is_debug(journal_path: Path) -> None:
+    assert run_log.record("step_started", path=journal_path)["level"] == "debug"
+
+
+def test_an_explicit_level_overrides_the_default(journal_path: Path) -> None:
+    entry = run_log.record("note", level="error", path=journal_path)
+    assert entry["level"] == "error"
+
+
+def test_entries_carry_a_pass_id(journal_path: Path) -> None:
+    assert run_log.record("note", path=journal_path)["pass_id"]
+
+
+def test_one_process_shares_one_pass_id(journal_path: Path) -> None:
+    first = run_log.record("note", path=journal_path)["pass_id"]
+    second = run_log.record("note", path=journal_path)["pass_id"]
+    assert first == second
+
+
+def test_the_environment_overrides_the_pass_id(journal_path: Path, monkeypatch) -> None:
+    # This is how `make loop` makes three separate processes one pass.
+    monkeypatch.setenv(run_log.PASS_ID_ENV, "pass-from-make")
+    assert run_log.record("note", path=journal_path)["pass_id"] == "pass-from-make"
+
+
+def test_main_filters_to_decisions(journal_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(paths, "RUN_LOG", journal_path)
+    run_log.record("step_started", step="tune", detail="noise", path=journal_path)
+    run_log.record("refused", step="freeze", detail="declined to unfreeze", path=journal_path)
+    run_log.main(["--decisions"])
+    out = capsys.readouterr().out
+    assert "declined to unfreeze" in out
+    assert "noise" not in out
+
+
+def test_main_all_shows_the_debug_entries(journal_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(paths, "RUN_LOG", journal_path)
+    run_log.record("step_started", step="tune", detail="noise", path=journal_path)
+    run_log.main(["--all"])
+    assert "noise" in capsys.readouterr().out
+
+
+def test_an_entry_written_before_levels_existed_still_displays(
+    journal_path: Path, capsys, monkeypatch
+) -> None:
+    # Backward compatibility: the journal predates the level field.
+    monkeypatch.setattr(paths, "RUN_LOG", journal_path)
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    journal_path.write_text(
+        json.dumps(
+            {
+                "timestamp_utc": "2026-01-01T00:00:00+00:00",
+                "event": "note",
+                "detail": "from before levels",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_log.main([])
+    assert "from before levels" in capsys.readouterr().out

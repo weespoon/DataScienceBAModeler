@@ -23,6 +23,7 @@ Usage::
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import subprocess
 import uuid
@@ -30,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import paths, run_log
 
 #: Column order of the ledger. Append new columns at the end only — older rows
 #: must stay readable.
@@ -53,6 +54,14 @@ COLUMNS: tuple[str, ...] = (
     #: statement. Appended at the end so older rows stay readable.
     "holdout_read",
     "notes",
+    #: Groups the rows written by one `make loop` iteration. Without it, "what
+    #: did pass 2 do?" is unanswerable, because each model gets its own run_id.
+    "pass_id",
+    #: Tamper-evidence. SHA-256 of the *previous* data line exactly as written,
+    #: so deleting a row or editing one breaks the next row's link. "Append-only"
+    #: was an honour system until this column existed: nothing would have
+    #: noticed a quietly removed result. See :func:`verify_chain`.
+    "prev_sha",
 )
 
 
@@ -111,14 +120,99 @@ def _frozen_sha() -> str:
     return str(value) if value else "unfrozen"
 
 
+def _data_lines(path: Path) -> list[str]:
+    """Every data line of the ledger, header excluded, newlines stripped."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [line for line in lines[1:] if line.strip()]
+
+
+def _line_sha(line: str) -> str:
+    """SHA-256 of one ledger line, exactly as written."""
+    return hashlib.sha256(line.encode("utf-8")).hexdigest()
+
+
 def ensure_log(path: Path | None = None) -> Path:
-    """Create the ledger with its header row if it does not exist yet."""
+    """Create the ledger, or migrate it when columns have been appended.
+
+    Migration rewrites the header and pads existing rows with empty values for
+    the new columns. No row is removed and no value changes — it is the
+    mechanical form of the CLAUDE.md rule that new columns go at the end so old
+    rows stay readable.
+
+    Note that a migration necessarily rewrites every line, which would break an
+    existing hash chain. That is safe only because :func:`verify_chain` starts
+    from the first row that actually carries a ``prev_sha``; rows written before
+    the chain existed are reported as unchained rather than as tampered.
+    """
     log_path = Path(path) if path is not None else paths.RESULTS_LOG
     log_path.parent.mkdir(parents=True, exist_ok=True)
+
     if not log_path.exists() or log_path.stat().st_size == 0:
         with log_path.open("w", newline="", encoding="utf-8") as handle:
             csv.writer(handle).writerow(COLUMNS)
+        return log_path
+
+    with log_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+        handle.seek(0)
+        existing = next(csv.reader(handle), [])
+
+    if existing == list(COLUMNS):
+        return log_path
+    if existing != list(COLUMNS[: len(existing)]):
+        raise ValueError(
+            f"{log_path} has an unrecognised header {existing}. Columns may only be "
+            f"appended, never reordered or removed; refusing to guess."
+        )
+
+    with log_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in COLUMNS})
     return log_path
+
+
+def verify_chain(path: Path | None = None) -> dict[str, Any]:
+    """Check the ledger's hash chain and report what it found.
+
+    Returns a dict with ``ok``, ``chained_rows``, ``unchained_rows`` and a list
+    of ``problems``. A row whose ``prev_sha`` does not match the hash of the
+    line above it means a row was deleted or edited between them.
+
+    Rows written before the chain existed carry no ``prev_sha``; they are
+    counted as unchained, not reported as tampered. Unverifiable is not the same
+    as proven bad, and saying otherwise would make the audit cry wolf.
+    """
+    log_path = Path(path) if path is not None else paths.RESULTS_LOG
+    lines = _data_lines(log_path)
+    problems: list[str] = []
+    chained = unchained = 0
+
+    for index, line in enumerate(lines):
+        fields = next(csv.reader([line]), [])
+        record = dict(zip(COLUMNS, fields, strict=False))
+        prev_sha = (record.get("prev_sha") or "").strip()
+        if not prev_sha:
+            unchained += 1
+            continue
+        chained += 1
+        expected = "genesis" if index == 0 else _line_sha(lines[index - 1])
+        if prev_sha != expected:
+            problems.append(
+                f"row {index + 1} ({record.get('run_id', '?')}): prev_sha does not match "
+                f"the line above it — a row was deleted or edited"
+            )
+
+    return {
+        "ok": not problems,
+        "chained_rows": chained,
+        "unchained_rows": unchained,
+        "problems": problems,
+    }
 
 
 def append_run(
@@ -133,6 +227,7 @@ def append_run(
     holdout_read: bool = False,
     notes: str = "",
     run_id: str | None = None,
+    pass_id: str | None = None,
     path: Path | None = None,
 ) -> str:
     """Append exactly one row to the ledger and return its ``run_id``.
@@ -161,7 +256,11 @@ def append_run(
         "git_sha": _git_sha(),
         "holdout_read": bool(holdout_read),
         "notes": notes.replace("\n", " ").strip(),
+        "pass_id": pass_id or run_log.current_pass_id(),
     }
+    previous = _data_lines(log_path)
+    row["prev_sha"] = _line_sha(previous[-1]) if previous else "genesis"
+
     with log_path.open("a", newline="", encoding="utf-8") as handle:
         csv.DictWriter(handle, fieldnames=COLUMNS).writerow(row)
     return resolved_run_id
