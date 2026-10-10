@@ -12,6 +12,7 @@ Two properties carry the design:
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -220,6 +221,50 @@ def test_the_index_is_derived_from_the_manifests(sandbox: Path, frozen_dir: Path
 
 def test_the_index_handles_no_experiments(sandbox: Path) -> None:
     assert "_none yet_" in experiments.write_index().read_text(encoding="utf-8")
+
+
+def test_the_index_prints_the_noise_band_beside_every_gap(sandbox: Path, frozen_dir: Path) -> None:
+    # The cv->val gap invites being read as a measurement of selection bias and
+    # is about eight times too coarse to be one. The band is printed so the
+    # table refutes that reading on sight, rather than a tracker being built.
+    exp = experiments.open_experiment("gap", frozen_dir=frozen_dir)
+    experiments._write(
+        experiments.Experiment(
+            **{**asdict(exp), "best_cv": 0.8401, "val_score": 0.8112, "status": "closed"}
+        )
+    )
+    text = experiments.write_index().read_text(encoding="utf-8")
+
+    assert "is not a measurement" in text
+    assert "-0.0289" in text
+    # 2 SE at ~0.81 over 143 rows is ~0.065, so a 0.029 gap is inside it
+    assert "(within noise)" in text
+
+
+def test_the_index_annotates_a_score_that_came_out_of_a_search(
+    sandbox: Path, frozen_dir: Path, log_path: Path, monkeypatch
+) -> None:
+    # A cv published after a search is biased upward, and nothing in the
+    # ledger's own columns says a search happened.
+    from titanic_agent import results_log
+
+    monkeypatch.setattr(paths, "RESULTS_LOG", log_path)
+    exp = experiments.open_experiment("searched", frozen_dir=frozen_dir)
+    results_log.append_run(
+        step="features",
+        model="random_forest",
+        params={"features": ["Sex"], "selection": {"selected_from": 36}},
+        cv_score=None,
+        experiment_id=exp.experiment_id,
+        path=log_path,
+    )
+    assert experiments._comparison_counts(log_path)[exp.experiment_id] == 36
+
+    experiments._write(
+        experiments.Experiment(**{**asdict(exp), "best_cv": 0.8401, "status": "closed"})
+    )
+    text = experiments.write_index().read_text(encoding="utf-8")
+    assert "selected from 36" in text
 
 
 # --------------------------------------------------------------------------- #

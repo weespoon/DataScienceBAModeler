@@ -106,10 +106,25 @@ def test_select_logs_one_row_per_test(sandbox: Path, frozen_dir: Path, log_path:
 
     frame = results_log.read_log(log_path)
     rows = frame[frame["step"] == "features"]
-    # one baseline row plus one per test, and one tune row for the re-tune
-    assert len(rows) == len(selection.tests) + 1
+    # one baseline row, one per test, one selection summary, plus a tune row
+    assert len(rows) == len(selection.tests) + 2
     assert (frame["step"] == "tune").sum() == 1
     assert not rows["holdout_read"].any()
+
+    # The summary row is deliberately unscored: it carries a *comparison*, and a
+    # second copy of the winning score would double-count in every "best cv"
+    # aggregation that reads this ledger.
+    summaries = [
+        row
+        for _, row in rows.iterrows()
+        if isinstance(row["params"], dict) and "selection" in row["params"]
+    ]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary["cv_score"] is None or pd.isna(summary["cv_score"])
+    assert summary["params"]["selection"]["selected_from"] == len(selection.tests)
+    assert summary["params"]["selection"]["baseline_run_id"] == selection.baseline_run_id
+    assert summary["params"]["selection"]["final_run_id"] == selection.final_run_id
     # two adds, then a remove test for every feature that survived them
     assert [t.action for t in selection.tests][:2] == ["add", "add"]
     assert len(selection.tests) == 2 + len([t for t in selection.tests if t.action == "remove"])

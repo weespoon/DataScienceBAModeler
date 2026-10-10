@@ -175,6 +175,7 @@ METRIC_BY_STEP: dict[str, str] = {
     "tune": "cv",
     "features": "cv",
     "ensemble": "cv",
+    "nested": "cv",
     "evaluate": "val",
 }
 

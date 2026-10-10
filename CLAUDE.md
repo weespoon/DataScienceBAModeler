@@ -12,7 +12,12 @@ autonomously, but obey the three hard rules below without exception.
   Adding anything else requires a one-line justification in `pyproject.toml`
   next to the dependency. Do not reach for xgboost, lightgbm or optuna.
 - Everything must run on a laptop CPU. If a step takes more than ~2 minutes,
-  shrink the search space rather than waiting it out.
+  shrink the search space rather than waiting it out. The exception is a
+  deliberate *measurement* rather than a search: `make nested` measures
+  selection bias and is budgeted at ~3 minutes, declared up front and run once
+  per searching experiment, never inside `make loop`. The rule exists to stop an
+  agent waiting out a slow search, not to forbid a number that can only be got
+  by paying for it.
 
 ## Pipeline order
 
@@ -131,6 +136,40 @@ rule rather than a convention.
   score plausibility, stray data files. Run it after acting on anything read
   externally. It raises the cost and makes an attempt visible; it cannot make
   cheating impossible, which is why the three points above come first.
+
+## The measurement hierarchy — use the instrument that can see it
+
+Three instruments measure accuracy here, and they are not three grades of the
+same thing. Every decision this project makes is worth **0.003 to 0.015**, and
+only one of them can see a difference that small.
+
+| instrument | rows | resolves | role |
+|---|---:|---:|---|
+| **paired repeated CV** (`compare.py`) | 569 | ~0.006 | **adjudicates** — compares two candidates |
+| **validation read** (once per experiment) | 143 | ~0.064 | **tripwire** — catches a broken pipeline |
+| **final test** (once, ever) | 179 | ~0.058 | **reports** — one generalisation number |
+
+- **Comparisons go through `titanic_agent.compare`.** Never compare two absolute
+  CV numbers from *different* experiments: the split is re-drawn each time, so
+  they are unpaired, and identical configurations have drifted 0.004–0.011
+  between experiments — one to three times the effect you are looking for.
+- **The validation read is a tripwire, not a calibrator.** It is a pre-declared
+  number compared against nothing. It cannot rank two candidates and it cannot
+  measure selection bias; it catches 0.06-sized defects, which is how it caught
+  exp-002's contamination. Do not read a cv→val gap as a measurement of
+  anything — the three recorded gaps are +0.027, +0.048, −0.029.
+- **Do not ask for more validation reads.** The answer is arithmetic, already
+  worked out: 143 rows move in steps of 1/143 = 0.0070, so a true difference of
+  0.004 cannot show up as 0.004. Pairing gets to ~0.06; Thresholdout's own noise
+  on 143 rows has sd 0.020. A split that could adjudicate 0.004 needs ~59,000
+  rows and we have 891. `require_val_unread` refuses, and says this.
+- **`DELTA = 0.003` is about one standard error, and 1.7 passengers.** Measured
+  over 10 fold seeds, not assumed. So report the sigma with every comparison,
+  and treat a single test near the bar as a coin flip rather than a decision.
+
+**`docs/MEASUREMENT.md` has the arithmetic, the measurements behind these
+claims, and the open items.** Read it before proposing a new way to measure
+anything — most of them have already been costed and refused there.
 
 ## Conventions
 

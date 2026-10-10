@@ -358,9 +358,16 @@ def require_val_unread(experiment_id: str, path: Path | None = None) -> None:
     """Refuse a second validation read within one experiment.
 
     Validation splits are cheap *across* experiments — the next one draws
-    different rows. They are not cheap *within* one: reading the same 142 rows
+    different rows. They are not cheap *within* one: reading the same 143 rows
     twice, with a model chosen in between, is adaptive overfitting at the
     experiment level and makes that experiment's number a selection statistic.
+
+    The refusal is deliberately long, and it argues rather than just forbids.
+    An agent that wants a second read is standing *here*, not in CLAUDE.md, and
+    the reason it should not want one is arithmetic it will otherwise re-derive
+    and get wrong. This repo's own lesson, from the commit that moved Rule 1
+    into a hook: enforce it where the hand reaches, not only where the rule is
+    written down.
 
     Raises:
         RuntimeError: This experiment already read its validation split.
@@ -374,6 +381,24 @@ def require_val_unread(experiment_id: str, path: Path | None = None) -> None:
         f"{first.get('timestamp_utc', 'an unrecorded time')} "
         f"(scored {first.get('score')}). Report that number, or open a new "
         f"experiment — a second read on the same rows is selection, not measurement."
+        "\n\n"
+        "Before you reach for a way around this: a second read would not answer "
+        "your question either. The validation split holds 143 rows, so its "
+        "accuracy moves in steps of 1/143 = 0.0070 and its standard error is "
+        "0.032. Two configurations that truly differ by 0.004 cannot differ on "
+        "it by 0.004 — they differ by 0, 0.0070 or 0.0140, whichever way the "
+        "disagreeing rows fall. Pairing does not rescue it (a paired read "
+        "resolves ~0.06 at best), and neither does the reusable-holdout "
+        "literature: Thresholdout's own noise on 143 rows has sd 0.020, five "
+        "times the effects argued about here. The problem is resolution, not "
+        "adaptivity, so no mechanism that makes reads *safe* makes them "
+        "*informative*.\n\n"
+        "Comparisons belong in titanic_agent.compare — paired repeated CV on "
+        "the 569 training rows resolves ~0.003, which is the only instrument "
+        "here that can settle the question. The val read is a pipeline "
+        "tripwire with ~0.06 resolution; it earned its keep by catching "
+        "exp-002's contamination, not by ranking candidates. "
+        "See docs/MEASUREMENT.md."
     )
 
 
@@ -572,6 +597,44 @@ def inherited_findings(experiment_id: str | None = None):
     return [f for f in findings.read_findings() if f.experiment_id in earlier]
 
 
+def _comparison_counts(log_path: Path | None = None) -> dict[str, int]:
+    """How many comparisons each experiment's reported score was selected from.
+
+    A score published after a search is biased upward, and nothing in the
+    ledger's own columns says a search happened. Feature rows carry
+    ``test_number`` per comparison and a summary row carries ``selected_from``,
+    so the count is derivable without a schema change -- which matters, because
+    a new column means a hash-chain rebuild and a rebuild costs the chain's
+    guarantee over every earlier row.
+    """
+    from . import results_log
+
+    try:
+        frame = results_log.read_log(log_path)
+    except Exception:
+        return {}
+    if frame.empty or "experiment_id" not in frame:
+        return {}
+
+    counts: dict[str, int] = {}
+    for _, row in frame.iterrows():
+        params = row["params"]
+        if not isinstance(params, dict):
+            continue
+        experiment_id = str(row["experiment_id"])
+        if not experiment_id or experiment_id == "nan":
+            continue
+        declared = params.get("selection", {})
+        number = declared.get("selected_from") if isinstance(declared, dict) else None
+        if number is None:
+            number = params.get("selected_from")
+        if number is None:
+            number = params.get("test_number")
+        if number is not None:
+            counts[experiment_id] = max(counts.get(experiment_id, 0), int(number))
+    return counts
+
+
 def write_index(path: Path | None = None) -> Path:
     """Rewrite ``EXPERIMENTS.md`` — one row per experiment, newest last.
 
@@ -580,29 +643,59 @@ def write_index(path: Path | None = None) -> Path:
     target = Path(path) if path is not None else paths.EXPERIMENTS_INDEX
     found = list_experiments()
 
+    searched = _comparison_counts()
+    val_rows = max((len(e.val_ids) for e in found), default=143)
+
+    def noise_band(score: float, rows: int) -> float:
+        """2 SE on an accuracy of ``score`` over ``rows`` rows.
+
+        Printed beside every gap because the gap invites being read as a
+        measurement of selection bias, and it is roughly eight times too coarse
+        to be one. Taken at the observed accuracy rather than the worst case
+        p=0.5, so it matches the figures in docs/MEASUREMENT.md.
+        """
+        return 2 * (max(score * (1 - score), 1e-9) / max(rows, 1)) ** 0.5
+
     lines = [
         "# Experiments",
         "",
         "Derived from each `experiment.json` by `experiments.write_index()`.",
         "Do not edit by hand — it will be overwritten.",
         "",
-        "`cv` is cross-validated on that experiment's own training split.",
-        "`val` is its own 142-row validation split, read once, autonomously.",
-        "Neither is the final test, which is read once for the whole programme.",
+        "`cv` is cross-validated on that experiment's own training split, and is",
+        "annotated with how many comparisons it was selected from where that is",
+        f"known — a post-search `cv` is biased upward. `val` is its own {val_rows}-row",
+        "validation split, read once, autonomously.",
         "",
-        "| experiment | status | train/val | best cv | val | summary |",
-        "| --- | --- | --- | --- | --- | --- |",
+        f"**`gap` is not a measurement.** At {val_rows} rows the 2 SE band is about",
+        f"±{noise_band(0.84, val_rows):.3f}, so a gap smaller than that says nothing; the",
+        "column is here to make that obvious rather than to be tracked.",
+        "Comparisons belong in `compare.py`.",
+        "Neither number is the final test, which is read once for the whole programme.",
+        "",
+        "| experiment | status | train/val | best cv | val | gap | summary |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for experiment in found:
         cv = "—" if experiment.best_cv is None else f"{experiment.best_cv:.4f}"
+        count = searched.get(experiment.experiment_id)
+        if cv != "—" and count:
+            cv += f" <br><sub>selected from {count}</sub>"
         val = "—" if experiment.val_score is None else f"{experiment.val_score:.4f}"
+        if experiment.best_cv is None or experiment.val_score is None:
+            gap = "—"
+        else:
+            difference = experiment.val_score - experiment.best_cv
+            band = noise_band(experiment.val_score, len(experiment.val_ids))
+            marker = "" if abs(difference) >= band else " (within noise)"
+            gap = f"{difference:+.4f} ±{band:.3f}{marker}"
         lines.append(
             f"| `{experiment.experiment_id}` | {experiment.status} | "
             f"{len(experiment.train_ids)}/{len(experiment.val_ids)} | {cv} | {val} | "
-            f"{experiment.summary or ''} |"
+            f"{gap} | {experiment.summary or ''} |"
         )
     if not found:
-        lines.append("| _none yet_ | | | | | |")
+        lines.append("| _none yet_ | | | | | | |")
 
     lines += [
         "",

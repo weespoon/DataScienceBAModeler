@@ -17,10 +17,11 @@ N_ITER ?= 25
 MODEL ?= all
 METHOD ?= soft_vote
 TOP_K ?= 4
+OUTER_FOLDS ?= 5
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune features ensemble \
-	test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
+	nested test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -70,6 +71,12 @@ tune: setup ## Step 6: CV model search; appends to experiments/results.csv
 MAX_TESTS ?= 50
 features: setup ## Greedy add/prune feature selection vs one fixed model (needs an open experiment)
 	$(PYTHON) -m titanic_agent.features --max-tests $(MAX_TESTS)
+
+# Over the ~2-minute laptop rule on purpose, and carved out by name in
+# CLAUDE.md: this is a deliberate measurement, not a search to be shrunk.
+# Deliberately absent from `make loop` -- once per searching experiment.
+nested: setup ## Measure a feature search's selection bias. Options: EXPERIMENT=<id> OUTER_FOLDS=5
+	$(PYTHON) -m titanic_agent.nested $(if $(EXPERIMENT),--experiment $(EXPERIMENT),) --outer-folds $(OUTER_FOLDS)
 
 ensemble: setup ## Step 7: combine the best models -> reports/submission.csv
 	$(PYTHON) -m titanic_agent.ensemble --method $(METHOD) --top-k $(TOP_K) --cv-folds $(CV_FOLDS)

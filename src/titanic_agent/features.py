@@ -18,11 +18,22 @@ gives the trees another way to fit noise — so the burden of proof is on it.
 Why repeated CV, and why paired
     One 5-fold run on ~570 rows has a fold std near 0.017, an order of magnitude
     larger than most feature effects. Three repeats of five folds, with both arms
-    of every comparison scored on the *same* 25 folds and the same estimator
-    seed, cancels most of the split noise out of the difference. It does not
-    cancel all of it: 40 sequential greedy decisions against a 0.003 bar will
-    accept some features on luck. That is what the experiment's single
-    validation read, on rows none of this saw, is for.
+    of every comparison scored on the *same* 15 folds and the same estimator
+    seed, cancels most of the split noise out of the difference. The comparator
+    and its measured precision live in :mod:`titanic_agent.compare`.
+
+    It does not cancel all of it, and the bar is weaker than it looks: ``DELTA``
+    is about **one** standard error (measured, see that module), so each greedy
+    decision against it is closer to a coin flip than the number suggests. A
+    sequence of them therefore accepts some features on luck, and the errors do
+    not cancel — the remove rule drops a feature *unless* keeping it is
+    justified, so every undecidable call goes the same way. That ratchet is why
+    :func:`select` ends by comparing the whole selected set against the original
+    baseline on identical folds, which is a question only CV can answer.
+
+    The experiment's single validation read is **not** what catches this. 143
+    rows resolve ~0.064; a selection bias of 0.004 is invisible to it. The val
+    read is a pipeline tripwire, and ``docs/MEASUREMENT.md`` says why.
 
 Every candidate is row-wise
     Each is a pure function of one passenger's own row — fixed bin edges, string
@@ -45,23 +56,33 @@ from typing import Any
 
 import numpy as np
 
+from . import compare as compare_module
 from . import paths
-
-#: Minimum CV gain a feature must buy to stay. About a third of one row per
-#: 114-row fold; small on purpose, so that it is the noise and not the bar that
-#: rejects a weak-but-real feature.
-DELTA: float = 0.003
+from .compare import CV_FOLDS, CV_REPEATS, DELTA, MODEL_KEY, compare_scores, fold_scores
 
 #: Hard cap on feature tests in one selection run. The baseline score and the
 #: one-off hyperparameter search do not count; every add or remove test does.
 MAX_TESTS: int = 50
 
-#: Repeated stratified K-fold: ``CV_FOLDS`` x ``CV_REPEATS`` paired scores.
-CV_FOLDS: int = 5
-CV_REPEATS: int = 3
-
-#: The model every feature is tested against: exp-004's best single model.
-MODEL_KEY: str = "random_forest"
+# DELTA, CV_FOLDS, CV_REPEATS, MODEL_KEY and fold_scores live in
+# :mod:`titanic_agent.compare` and are re-exported here so that the selection
+# rule is stated in terms of the same bar every other comparison uses. They
+# were defined in this module until the comparator was lifted out; a second
+# copy of DELTA is the kind of drift that makes two experiments incomparable
+# without either one looking wrong.
+__all__ = [
+    "CANDIDATES",
+    "CV_FOLDS",
+    "CV_REPEATS",
+    "DELTA",
+    "MAX_TESTS",
+    "MODEL_KEY",
+    "Selection",
+    "add_candidates",
+    "fold_scores",
+    "render_markdown",
+    "select",
+]
 
 #: Life-stage boundaries. Round numbers chosen from what "child" and "elderly"
 #: meant for lifeboat loading, not fitted to this data.
@@ -281,34 +302,177 @@ class Selection:
     tests: list[FeatureTest] = field(default_factory=list)
     stopped: str = ""
     seconds: float = 0.0
-
-
-def fold_scores(
-    frame, features: list[str], params: dict[str, Any], *, seed: int, folds: int, repeats: int
-) -> np.ndarray:
-    """Accuracy on every fold of a seeded repeated stratified K-fold.
-
-    The fold generator and the estimator seed depend only on ``seed``, so two
-    calls with different ``features`` are scored on identical splits by
-    identically-seeded forests — which is what makes the difference *paired*.
-    """
-    from sklearn.model_selection import RepeatedStratifiedKFold, cross_val_score
-
-    from . import tune
-
-    pipeline = tune.build_pipeline(MODEL_KEY, seed=seed)
-    # One core per forest; the folds run in parallel instead.
-    pipeline.set_params(**params, clf__n_jobs=1)
-    splitter = RepeatedStratifiedKFold(n_splits=folds, n_repeats=repeats, random_state=seed)
-    return cross_val_score(
-        pipeline, frame[features], frame["Survived"], cv=splitter, scoring="accuracy", n_jobs=-1
-    )
+    #: The selected set against the *original* baseline, on identical folds.
+    #:
+    #: Each individual test compares against whatever was current at the time,
+    #: so the published gain is a sum of greedy steps and never a measurement of
+    #: the whole move. exp-006 reported +0.0041 and said it "cannot distinguish
+    #: the pruned set from the baseline" — but that is a CV comparison it simply
+    #: did not make, not a limit of the data. Fifteen extra fits make it.
+    overall: compare_module.PairedResult | None = None
 
 
 def plan(baseline: list[str], candidates: list[str]) -> list[tuple[str, str]]:
     """The add phase in candidate order. The remove phase is planned later,
     from whatever survives the add phase."""
     return [("add", name) for name in candidates if name not in baseline]
+
+
+@dataclass
+class SearchStep:
+    """One add-or-remove comparison, before anything is written down."""
+
+    number: int
+    action: str
+    feature: str
+    trial: list[str]
+    value: float
+    kept: bool
+    accepted: bool
+    scores: Any = None
+    paired: compare_module.PairedResult | None = None
+    error: str = ""
+
+
+@dataclass
+class SearchResult:
+    """What the search did, with no ledger rows and no side effects."""
+
+    baseline: list[str]
+    baseline_scores: Any
+    selected: list[str]
+    selected_scores: Any
+    steps: list[SearchStep] = field(default_factory=list)
+    stopped: str = ""
+    overall: compare_module.PairedResult | None = None
+
+
+def greedy_search(
+    frame,
+    baseline: list[str],
+    candidates: list[str],
+    params: dict[str, Any],
+    *,
+    seed: int,
+    delta: float = DELTA,
+    folds: int = CV_FOLDS,
+    repeats: int = CV_REPEATS,
+    max_tests: int = MAX_TESTS,
+    baseline_scores=None,
+    on_step=None,
+) -> SearchResult:
+    """The selection procedure itself, with no I/O.
+
+    Pulled out of :func:`select` so that :mod:`titanic_agent.nested` can run the
+    **same** procedure inside an outer fold. A nested estimate of a cheaper
+    surrogate measures the surrogate, not the thing we run — and a second copy
+    of the algorithm would drift from this one without either looking wrong,
+    which is the failure mode ``docs/MEASUREMENT.md`` describes for a second
+    copy of ``DELTA``.
+
+    Args:
+        baseline_scores: The baseline's fold vector, when the caller already
+            has it. :func:`select` does, because it logs the baseline row
+            before any test runs so that each test can reference it.
+        on_step: Called with each :class:`SearchStep` as it completes. This is
+            where :func:`select` writes its ledger rows; the nested loop passes
+            nothing, because an inner fold is not an experiment.
+
+    Returns:
+        The selected set, its fold vector, every step, and the endpoint
+        comparison against the original baseline — which is free, since both
+        arms were scored on the same folds.
+    """
+    current = list(baseline)
+    if baseline_scores is None:
+        baseline_scores = fold_scores(
+            frame, current, params, seed=seed, folds=folds, repeats=repeats
+        )
+    current_scores = baseline_scores
+    result = SearchResult(
+        baseline=list(baseline),
+        baseline_scores=baseline_scores,
+        selected=current,
+        selected_scores=current_scores,
+    )
+
+    def run_test(action: str, feature: str) -> None:
+        nonlocal current, current_scores
+        number = len(result.steps) + 1
+        trial = current + [feature] if action == "add" else [f for f in current if f != feature]
+        try:
+            scores = fold_scores(frame, trial, params, seed=seed, folds=folds, repeats=repeats)
+        except Exception as exc:  # a failed test is a result too
+            step = SearchStep(
+                number,
+                action,
+                feature,
+                trial,
+                0.0,
+                False,
+                False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            result.steps.append(step)
+            if on_step is not None:
+                on_step(step)
+            return
+
+        paired = compare_scores(
+            scores,
+            current_scores,
+            label=f"{action} {feature}",
+            n_rows=len(frame),
+            seed=seed,
+            repeats=repeats,
+        )
+        # The feature's value is always (with) - (without), whichever arm it is.
+        value = paired.delta if action == "add" else -paired.delta
+        kept = value >= delta
+        step = SearchStep(
+            number,
+            action,
+            feature,
+            trial,
+            value,
+            kept,
+            accepted=(action == "add" and kept) or (action == "remove" and not kept),
+            scores=scores,
+            paired=paired,
+        )
+        result.steps.append(step)
+        if on_step is not None:
+            on_step(step)
+        if step.accepted:
+            current, current_scores = trial, scores
+
+    for action, feature in plan(baseline, candidates):
+        if len(result.steps) >= max_tests:
+            result.stopped = f"test cap {max_tests} reached during the add phase"
+            break
+        run_test(action, feature)
+
+    if not result.stopped:
+        for feature in list(current):
+            if len(result.steps) >= max_tests:
+                result.stopped = f"test cap {max_tests} reached during the remove phase"
+                break
+            if len(current) == 1:
+                break
+            run_test("remove", feature)
+
+    result.selected = current
+    result.selected_scores = current_scores
+    result.stopped = result.stopped or "every planned test ran"
+    result.overall = compare_scores(
+        current_scores,
+        baseline_scores,
+        label=f"selected {len(current)} features vs baseline {len(baseline)}",
+        n_rows=len(frame),
+        seed=seed,
+        repeats=repeats,
+    )
+    return result
 
 
 def select(
@@ -395,121 +559,174 @@ def select(
             path=log_path,
         )
 
-    current = list(baseline)
-    current_scores = fold_scores(frame, current, params, seed=seed, folds=folds, repeats=repeats)
+    baseline_scores = fold_scores(frame, baseline, params, seed=seed, folds=folds, repeats=repeats)
     baseline_run_id = log_row(
-        current, current_scores, {"test": "baseline"}, "features: baseline under repeated CV"
+        baseline, baseline_scores, {"test": "baseline"}, "features: baseline under repeated CV"
     )
     selection = Selection(
         experiment_id=experiment.experiment_id,
         params=params,
         baseline_features=list(baseline),
-        baseline_score=float(current_scores.mean()),
+        baseline_score=float(baseline_scores.mean()),
         baseline_run_id=baseline_run_id,
     )
     current_run_id = baseline_run_id
 
-    def run_test(action: str, feature: str) -> None:
-        nonlocal current, current_scores, current_run_id
-        number = len(selection.tests) + 1
-        trial = current + [feature] if action == "add" else [f for f in current if f != feature]
-        try:
-            scores = fold_scores(frame, trial, params, seed=seed, folds=folds, repeats=repeats)
-        except Exception as exc:  # a failed test is a result too
+    def on_step(step: SearchStep) -> None:
+        """Write one ledger row per comparison. The search itself is in
+        :func:`greedy_search`; this is only the bookkeeping."""
+        nonlocal current_run_id
+        if step.error:
             run_id = results_log.append_run(
                 step="features",
                 model=MODEL_KEY,
-                params={**params, "features": trial, "test": f"{action} {feature}"},
+                params={**params, "features": step.trial, "test": f"{step.action} {step.feature}"},
                 cv_score=None,
                 cv_folds=folds * repeats,
                 seed=seed,
                 holdout_read=False,
-                notes=f"features #{number} {action} {feature} FAILED: {type(exc).__name__}: {exc}",
+                notes=(
+                    f"features #{step.number} {step.action} {step.feature} FAILED: {step.error}"
+                ),
                 path=log_path,
             )
-            run_log.record("step_failed", step="features", detail=str(exc), run_id=run_id)
+            run_log.record("step_failed", step="features", detail=step.error, run_id=run_id)
             selection.tests.append(
-                FeatureTest(number, action, feature, 0.0, float("nan"), 0, 0, 0, False, run_id)
+                FeatureTest(
+                    step.number,
+                    step.action,
+                    step.feature,
+                    0.0,
+                    float("nan"),
+                    0,
+                    0,
+                    0,
+                    False,
+                    run_id,
+                )
             )
             return
 
-        diff = scores - current_scores
-        delta_vs_base = float(diff.mean())
-        se = float(diff.std(ddof=1) / np.sqrt(len(diff)))
-        # The feature's value is always (with) - (without), whichever arm it is.
-        value = delta_vs_base if action == "add" else -delta_vs_base
-        kept = value >= delta
-        accepted = (action == "add" and kept) or (action == "remove" and not kept)
-        verdict = "KEEP" if kept else "DROP"
+        paired = step.paired
+        assert paired is not None  # a step without an error always has one
+        value, se = step.value, paired.naive_se
+        sigma = value / se if se else 0.0
+        verdict = "KEEP" if step.kept else "DROP"
         run_id = log_row(
-            trial,
-            scores,
+            step.trial,
+            step.scores,
             {
-                "test": f"{action} {feature}",
-                "test_number": number,
+                "test": f"{step.action} {step.feature}",
+                "test_number": step.number,
                 "feature_value": round(value, 6),
                 "paired_se": round(se, 6),
+                # The bar is about one SE wide (see compare.py), so a verdict
+                # without its sigma reads far more decisive than it is.
+                "sigma": round(sigma, 3),
+                "passengers": round(value * len(frame), 2),
                 "decision": verdict.lower(),
                 "base_run_id": current_run_id,
             },
             (
-                f"features #{number}: {action} {feature} -> {verdict} "
-                f"(value {value:+.4f} +/- {se:.4f} SE vs {current_run_id}; bar {delta})"
+                f"features #{step.number}: {step.action} {step.feature} -> {verdict} "
+                f"(value {value:+.4f} +/- {se:.4f} SE, {sigma:+.2f} sigma "
+                f"vs {current_run_id}; bar {delta})"
             ),
         )
         selection.tests.append(
             FeatureTest(
-                number,
-                action,
-                feature,
-                float(current_scores.mean()),
-                float(scores.mean()),
-                delta_vs_base,
+                step.number,
+                step.action,
+                step.feature,
+                paired.score_b,
+                paired.score_a,
+                paired.delta,
                 se,
                 value,
-                kept,
+                step.kept,
                 run_id,
             )
         )
         run_log.record(
             "step_finished",
             step="features",
-            detail=f"#{number} {action} {feature}: value {value:+.4f} (se {se:.4f}) -> {verdict}",
+            detail=(
+                f"#{step.number} {step.action} {step.feature}: value {value:+.4f} "
+                f"(se {se:.4f}, {sigma:+.2f} sigma) -> {verdict}"
+            ),
             run_id=run_id,
         )
-        if accepted:
-            current, current_scores, current_run_id = trial, scores, run_id
+        if step.accepted:
+            current_run_id = run_id
 
-    for action, feature in plan(baseline, candidates):
-        if len(selection.tests) >= max_tests:
-            selection.stopped = f"test cap {max_tests} reached during the add phase"
-            break
-        run_test(action, feature)
+    search = greedy_search(
+        frame,
+        baseline,
+        candidates,
+        params,
+        seed=seed,
+        delta=delta,
+        folds=folds,
+        repeats=repeats,
+        max_tests=max_tests,
+        baseline_scores=baseline_scores,
+        on_step=on_step,
+    )
 
-    if not selection.stopped:
-        for feature in list(current):
-            if len(selection.tests) >= max_tests:
-                selection.stopped = f"test cap {max_tests} reached during the remove phase"
-                break
-            if len(current) == 1:
-                break
-            run_test("remove", feature)
-
-    selection.features = current
-    selection.score = float(current_scores.mean())
+    selection.features = search.selected
+    selection.score = float(search.selected_scores.mean())
     selection.final_run_id = current_run_id
-    selection.stopped = selection.stopped or "every planned test ran"
+    selection.stopped = search.stopped
+    # The question every greedy search leaves open: was the whole move worth
+    # anything? Each step cleared its own bar against a moving baseline, and a
+    # ratchet of individually-defensible steps can still lose ground. Both fold
+    # vectors are already in hand on identical folds, so this is free.
+    selection.overall = search.overall
+    accepted_drops = [t for t in selection.tests if t.action == "remove" and not t.kept]
+    costly_drops = [t for t in accepted_drops if t.feature_value > 0]
+    selection.params = {**params}
+    summary = {
+        "selected_from": len(selection.tests),
+        "rule": f"keep iff (with - without) >= {delta}",
+        "search": "greedy add-then-prune",
+        "baseline_run_id": baseline_run_id,
+        "final_run_id": selection.final_run_id,
+        "accepted_drops": len(accepted_drops),
+        "accepted_drops_that_cost_accuracy": len(costly_drops),
+        **selection.overall.as_params(),
+    }
+    results_log.append_run(
+        step="features",
+        model=MODEL_KEY,
+        params={**params, "features": selection.features, "selection": summary},
+        # Deliberately unscored: this row is a *comparison*, not an accuracy,
+        # and a second copy of the winning score would double-count in every
+        # "best cv" aggregation that reads this ledger.
+        cv_score=None,
+        cv_folds=folds * repeats,
+        seed=seed,
+        holdout_read=False,  # attested: selection reads the experiment's train rows only
+        notes=(
+            f"features: selection summary over {len(selection.tests)} comparisons. "
+            f"{selection.overall.describe()}. Baseline {baseline_run_id} -> "
+            f"selected {selection.final_run_id}. {len(costly_drops)} of {len(accepted_drops)} "
+            f"accepted drops cost accuracy but failed to reach the {delta} bar"
+        ),
+        path=log_path,
+    )
     selection.seconds = time.perf_counter() - started
     experiments.record_spend("wall_clock_s", round(selection.seconds, 1))
     run_log.record(
         "decision",
         step="features",
         detail=(
-            f"selected {len(current)} features, cv {selection.score:.4f} vs baseline "
-            f"{selection.baseline_score:.4f}; final row {current_run_id} is the one "
-            f"evaluate will score ({selection.stopped})"
+            f"selected {len(selection.features)} features, cv {selection.score:.4f} vs "
+            f"baseline {selection.baseline_score:.4f}; whole move "
+            f"{selection.overall.describe()}; "
+            f"final row {selection.final_run_id} is the one evaluate will score "
+            f"({selection.stopped})"
         ),
-        run_id=current_run_id,
+        run_id=selection.final_run_id,
     )
     return selection
 
@@ -525,8 +742,14 @@ def render_markdown(selection: Selection) -> str:
         f"Rule, declared before testing: keep a feature iff score(with) − score(without) "
         f"≥ **{DELTA}**, on {CV_FOLDS}×{CV_REPEATS} repeated stratified CV with both arms "
         "on identical folds. SE is the standard error of the "
-        f"{CV_FOLDS * CV_REPEATS} paired fold differences; "
-        "repeated-CV folds overlap, so it understates the true uncertainty.",
+        f"{CV_FOLDS * CV_REPEATS} paired fold differences.",
+        "",
+        f"**Read the sigma column, not the verdict.** On ~570 rows the {DELTA} bar is "
+        "about *one* standard error wide — measured, not assumed (`compare.py`) — so a "
+        "test near the bar is close to a coin flip. One flipped prediction is 0.0018, "
+        f"making the bar {DELTA * 570:.1f} passengers. The remove rule also drops a "
+        "feature *unless* keeping it clears the bar, so every undecidable removal goes "
+        "the same way and the errors ratchet rather than cancel.",
         "",
         f"- Baseline ({len(selection.baseline_features)} features): "
         f"**{selection.baseline_score:.4f}** (`{selection.baseline_run_id}`)",
@@ -535,22 +758,54 @@ def render_markdown(selection: Selection) -> str:
         f"- Tests run: {len(selection.tests)} of a {MAX_TESTS} cap — {selection.stopped}; "
         f"{selection.seconds:.0f}s",
         "",
-        "| # | test | value (with − without) | paired SE | verdict | cv after |",
-        "| --- | --- | ---: | ---: | --- | ---: |",
+        "| # | test | value (with − without) | paired SE | sigma | verdict | cv after |",
+        "| --- | --- | ---: | ---: | ---: | --- | ---: |",
     ]
     for test in selection.tests:
+        sigma = test.feature_value / test.se if test.se else 0.0
         lines.append(
             f"| {test.number} | {test.action} `{test.feature}` | {test.feature_value:+.4f} | "
-            f"{test.se:.4f} | {'keep' if test.kept else 'drop'} | {test.score:.4f} |"
+            f"{test.se:.4f} | {sigma:+.2f} | {'keep' if test.kept else 'drop'} | "
+            f"{test.score:.4f} |"
         )
     added = [t.feature for t in selection.tests if t.action == "add" and t.kept]
     removed = [t.feature for t in selection.tests if t.action == "remove" and not t.kept]
+    costly = [
+        t for t in selection.tests if t.action == "remove" and not t.kept and t.feature_value > 0
+    ]
     lines += [
         "",
         f"**Added:** {', '.join(added) or 'none'}  ",
         f"**Removed:** {', '.join(removed) or 'none'}  ",
         f"**Final set:** {', '.join(selection.features)}",
         "",
+    ]
+    if selection.overall is not None:
+        verdict = (
+            "clears the bar"
+            if selection.overall.clears(DELTA)
+            else "does **not** clear the bar it was built from"
+        )
+        lines += [
+            "## Was the whole move worth it?",
+            "",
+            "Each test above cleared its bar against whatever was current at the time, so "
+            "the published gain is a sum of greedy steps rather than a measurement of the "
+            "move. This compares the endpoints directly, on the same folds:",
+            "",
+            f"- {selection.overall.describe()} — {verdict}.",
+            "",
+        ]
+        if costly:
+            lines += [
+                f"- {len(costly)} of the {len(removed) or 0} accepted drops "
+                f"(`{'`, `'.join(t.feature for t in costly)}`) *cost* accuracy and were "
+                "accepted only because the cost did not reach the bar. That is the "
+                "ratchet: a removal whose true cost is under the bar is always taken, "
+                "and nothing can add it back.",
+                "",
+            ]
+    lines += [
         "## Candidate rationale",
         "",
     ]

@@ -26,7 +26,7 @@ stops looking.
 
 Usage::
 
-    python scripts/redact.py export.txt -o conversations/001-topic.md
+    python scripts/redact.py export.txt -o /tmp/001-topic.md
     python scripts/redact.py export.txt --check    # report, write nothing
 """
 
