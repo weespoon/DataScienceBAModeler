@@ -36,12 +36,16 @@ make ensemble METHOD=stack TOP_K=5
 
 ## Done criteria
 
-- [ ] The ensemble's `cv_score` is logged and at least matches the best single
-      `tune` row. If it does not, say so in the report and ship the single model.
+- [ ] The ensemble's `cv_score` is logged. **Whether it beats the best single
+      `tune` row is a result, not a done criterion** — an ensemble that loses to
+      one good model is a real and common finding. Say so in the report and ship
+      the single model. Never re-roll members until the number improves.
 - [ ] Members are at least two, all sharing the current `frozen_sha256`.
 - [ ] `reports/submission.csv` has exactly 418 rows plus a header, no missing
       values, and labels in `{0, 1}`.
-- [ ] The holdout was read at most once, after member selection was final.
+- [ ] `experiments/holdout_reads.json` holds **exactly one** receipt for the
+      current `frozen_sha256` if `--score-holdout` was used, and none otherwise.
+- [ ] The ledger row attests `holdout_read` matching what actually happened.
 - [ ] `reports/03_ensemble.md` reports CV and holdout side by side.
 
 ## Notes

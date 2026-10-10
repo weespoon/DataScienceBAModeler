@@ -12,8 +12,13 @@ Outputs
     ``data/frozen/test.csv``, ``data/frozen/MANIFEST.json`` — all mode 0444.
 Done criteria
     :func:`verify` returns True: every manifest entry exists and its checksum
-    matches. Re-running ``freeze`` on an already-frozen directory is a no-op
-    that re-verifies rather than a rewrite.
+    matches. Re-running ``freeze`` on an already-frozen directory **raises
+    RuntimeError** — it is not a no-op, and there is no flag that makes it one.
+    Use :func:`verify` (or ``make verify``) to re-check an existing freeze.
+
+Because ``freeze`` refuses to run twice, it must never sit inside a loop that
+reruns. ``make bootstrap`` covers steps 2-4 and is run once; ``make loop``
+covers the repeatable steps 5-7.
 """
 
 from __future__ import annotations

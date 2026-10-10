@@ -42,11 +42,14 @@ chmod 0444 and every one is checksummed in the manifest.
 - Every step after `freeze` calls `freeze.require_frozen()` first and refuses to
   run if a checksum does not match.
 - `freeze()` has no `force` flag. Re-freezing raises.
-- If the frozen data genuinely must change — a corrupt pull, a bad split — that
-  is a deliberate manual act (`chmod -R u+w data/frozen && rm -rf data/frozen/*`),
-  and it **invalidates every score already in the ledger**. Note it in the
-  `notes` column of the next run and start the ledger comparison over, because
-  scores carrying a different `frozen_sha256` are not comparable.
+- A `PreToolUse` hook denies any write to `data/frozen/` once a manifest exists.
+  If you hit that denial, the hook is working — do not look for a way around it.
+- **Unfreezing is a human action. Stop and ask.** If you believe the frozen data
+  must change — a corrupt pull, a structurally broken split — say so, explain
+  why, and wait. Do not unfreeze, do not `chmod`, do not delete anything under
+  `data/frozen/`, and do not reach for a tool that would get around the hook.
+  Re-freezing invalidates every score already in the ledger, because those rows
+  carry the old `frozen_sha256` and nothing can recover what they measured.
 
 ## Rule 2 — the holdout is read once, at the end
 
@@ -57,8 +60,22 @@ chmod 0444 and every one is checksummed in the manifest.
 - Only `ensemble` may read it, only with `score_holdout=True`, and only once the
   ensemble has already been chosen by CV. The holdout number goes in the report
   and the ledger; it is **never** a signal to go back and pick a different model.
-- If you find yourself wanting a second look at the holdout, that means you want
-  a new frozen dataset. Say so in the report instead of peeking.
+- **This is the second tripwire. Stop and ask.** `--score-holdout` is a
+  once-per-dataset, irreversible measurement, and it is deliberately absent from
+  every `make` target. An autonomous pass does not take it on its own.
+- Every read leaves a receipt in `experiments/holdout_reads.json`, keyed by
+  `frozen_sha256`. `receipts.require_unread()` runs *before* the read and
+  refuses a second one; `receipts.record_holdout_read()` runs *after*, so the
+  read leaves a trace either way.
+- No mechanism can stop a stray `pd.read_csv('data/frozen/holdout.csv')` in a
+  step that has no business reading it, and file access times cannot reliably
+  detect one. That is why **every ledger row attests `holdout_read`.** The
+  attestation does not prevent the read; it makes a silent one into an
+  attributable false statement. Sign it honestly — including when the honest
+  answer is embarrassing. A wrong number you reported is recoverable; a false
+  attestation makes every other row untrustworthy.
+- If you want a second look at the holdout, you want a new frozen dataset, and
+  that is a human decision. Say so in the report instead of peeking.
 
 ## Rule 3 — every experiment appends to the ledger
 
@@ -71,6 +88,14 @@ chmod 0444 and every one is checksummed in the manifest.
   `cv_std`, `cv_folds`, `seed`, `frozen_sha256`, `git_sha`, `notes`.
 - Log failures too, with the error in `notes` and an empty `cv_score`. A failed
   configuration is a result; silently dropping it makes the sweep a lie.
+- A row cannot be edited, so a correction is an **amendment, not an edit**:
+  append a new row whose `notes` reference the original `run_id`. If a run dies
+  before it can log, log that fact afterwards — an exception that kills the
+  process writes nothing, and a gap in the ledger is indistinguishable from a
+  run you chose not to record.
+- `git_sha` carries a `-dirty` suffix when the working tree has uncommitted
+  changes. Do not strip it. A score you cannot tie to committed code is not
+  reproducible, and the column exists to say so out loud.
 - `make log` prints the ledger. Compare only rows sharing a `frozen_sha256`.
 
 ## Conventions

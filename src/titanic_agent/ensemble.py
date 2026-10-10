@@ -107,7 +107,8 @@ def ensemble(
 
     Raises:
         RuntimeError: Not frozen, verification failed, or ``score_holdout`` was
-            requested for a frozen dataset whose holdout was already scored.
+            requested for a frozen dataset whose holdout was already scored —
+            see :func:`titanic_agent.receipts.require_unread`.
         ValueError: Unknown ``method``, or fewer than two members.
     """
     # TODO(ensemble): implement.
@@ -116,9 +117,17 @@ def ensemble(
     #   3. VotingClassifier(voting="soft"/"hard") or StackingClassifier with a
     #      LogisticRegression meta-learner; cross-validate on train.csv.
     #   4. results_log.append_run(step="ensemble", model=f"{method}({members})",
-    #      params={"members": ..., "weights": ...}, cv_score=..., cv_std=...).
-    #   5. Only if score_holdout: fit on all of train.csv, score holdout.csv
-    #      once, and record it in the SAME ledger row's notes.
+    #      params={"members": ..., "weights": ...}, cv_score=..., cv_std=...,
+    #      holdout_read=score_holdout).  The attestation is required: it is what
+    #      makes a silent holdout read an attributable false statement.
+    #   5. Only if score_holdout, and in this order:
+    #        a. receipts.require_unread(manifest.dataset_sha256) -- BEFORE the
+    #           read, so a second measurement is refused rather than taken;
+    #        b. fit on all of train.csv, score holdout.csv once;
+    #        c. receipts.record_holdout_read(frozen_sha256=..., run_id=...,
+    #           score=...) -- AFTER, so the read leaves a trace either way;
+    #        d. record the score in the same ledger row's notes.
+    #      Never reorder (a) and (b): checking after reading defeats the point.
     #   6. Predict test.csv -> submission_path with columns
     #      PassengerId,Survived (int 0/1).
     raise NotImplementedError("ensemble() is not implemented yet")

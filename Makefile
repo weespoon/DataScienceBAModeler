@@ -19,7 +19,8 @@ METHOD ?= soft_vote
 TOP_K ?= 4
 
 .DEFAULT_GOAL := help
-.PHONY: help setup pull review split freeze verify explore tune ensemble test lint log all clean distclean
+.PHONY: help setup pull review split freeze verify explore tune ensemble \
+	test lint log status receipts bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -79,7 +80,19 @@ lint: setup ## Lint and format-check with ruff
 log: setup ## Print the experiment ledger
 	$(PYTHON) -m titanic_agent.results_log
 
-all: review split freeze explore tune ensemble ## Everything after pull, in order
+# `freeze` raises on an already-frozen dir, so it must never sit in a loop that
+# reruns. Hence two aggregates instead of one `all`: bootstrap is do-once, loop
+# is the repeatable part and is what an autonomous pass actually iterates.
+bootstrap: review split freeze ## Steps 2-4, run ONCE: audit, split, seal the data
+	@echo "bootstrap complete -- data is frozen. From here on, use: make loop"
+
+loop: explore tune ensemble ## Steps 5-7, repeatable: the autonomous iterate loop
+
+status: setup ## Which pipeline steps have completed, derived from artifacts on disk
+	$(PYTHON) -m titanic_agent.status
+
+receipts: setup ## Show the holdout read receipts
+	$(PYTHON) -m titanic_agent.receipts
 
 clean: ## Remove caches and generated reports (never touches data/)
 	rm -rf .pytest_cache .ruff_cache

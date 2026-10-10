@@ -55,12 +55,11 @@ def _utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
-def _git_sha(short: bool = True) -> str:
-    """Return the current git commit SHA, or ``"unknown"`` outside a repo."""
-    cmd = ["git", "rev-parse", *(["--short"] if short else []), "HEAD"]
+def _run_git(*args: str) -> str | None:
+    """Run a git command in the repo root, or return None if it fails."""
     try:
         out = subprocess.run(
-            cmd,
+            ["git", *args],
             cwd=paths.ROOT,
             capture_output=True,
             text=True,
@@ -68,8 +67,28 @@ def _git_sha(short: bool = True) -> str:
             check=True,
         )
     except (subprocess.SubprocessError, OSError):
+        return None
+    return out.stdout
+
+
+def _git_sha(short: bool = True) -> str:
+    """Return the current git commit SHA, or ``"unknown"`` outside a repo.
+
+    A ``-dirty`` suffix is appended when the working tree has uncommitted
+    changes, because without it the column is a quiet lie: the bare SHA claims
+    the row was produced by committed code that may not be what ran. A score
+    you cannot tie to code is not reproducible, so the ledger has to say so.
+    """
+    raw = _run_git("rev-parse", *(["--short"] if short else []), "HEAD")
+    if raw is None:
         return "unknown"
-    return out.stdout.strip() or "unknown"
+    sha = raw.strip()
+    if not sha:
+        return "unknown"
+    status = _run_git("status", "--porcelain")
+    if status is None:
+        return sha
+    return f"{sha}-dirty" if status.strip() else sha
 
 
 def _frozen_sha() -> str:

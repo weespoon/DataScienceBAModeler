@@ -35,6 +35,11 @@ MANIFEST: Path = FROZEN_DIR / "MANIFEST.json"
 #: Append-only experiment ledger. See :mod:`titanic_agent.results_log`.
 RESULTS_LOG: Path = EXPERIMENTS_DIR / "results.csv"
 
+#: Append-only record of every holdout read, keyed by frozen fingerprint. It
+#: lives outside ``data/frozen`` of necessity: an immutable store cannot log its
+#: own access. See :mod:`titanic_agent.receipts`.
+HOLDOUT_READS: Path = EXPERIMENTS_DIR / "holdout_reads.json"
+
 #: Default random seed. Change it only with a recorded reason — the split that
 #: produced the frozen holdout is reproducible from this value plus MANIFEST.json.
 SEED: int = 20251010

@@ -44,9 +44,12 @@ make verify     # re-check checksums at any time
 - There is **no `force` flag**, on purpose. Overwriting the frozen data
   invalidates every score already in `experiments/results.csv`, because those
   rows carry the old `frozen_sha256`.
-- Unfreezing is a deliberate manual act:
-  `chmod -R u+w data/frozen && rm -rf data/frozen/*`. If you do it, say so in the
-  `notes` column of the next logged run, and stop comparing against older rows.
+- **Unfreezing is a human action. Stop and ask.** It is one of the two tripwires
+  in this pipeline (the other is `ensemble --score-holdout`). If you think the
+  data must be re-frozen, say why and wait for a person. Do not `chmod`, do not
+  delete anything under `data/frozen/`, and do not work around the `PreToolUse`
+  hook that denies writes there.
 - `require_frozen()` is the guard every later step calls first. If it raises,
-  the right move is to investigate the mismatch, not to re-freeze.
+  the right move is to investigate the mismatch and report it, not to re-freeze.
+  A checksum mismatch is information, not an obstacle.
 - Next step: `explore`.

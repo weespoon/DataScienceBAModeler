@@ -33,10 +33,13 @@ make tune MODEL=random_forest N_ITER=40    # one model, deeper search
 ## Done criteria
 
 - [ ] Every evaluated model has exactly one ledger row, `dummy` included.
-- [ ] The best `cv_score` beats the `dummy` baseline (~0.616 majority class).
 - [ ] Every row carries a non-empty `frozen_sha256` matching the current manifest.
+- [ ] Every row attests `holdout_read` honestly (it should be `false` here).
 - [ ] Each model's search stays under `time_budget_s` (default 120s) on one CPU.
-- [ ] No step in this run read `holdout.csv`.
+- [ ] The `dummy` baseline is logged, so the others have something to be read
+      against. **Whether anything beats it is a result, not a done criterion** —
+      if nothing does, that is the finding, and the honest move is to log it and
+      say so. Do not re-run a search hoping for a luckier seed.
 
 ## Notes
 
