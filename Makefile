@@ -19,7 +19,7 @@ METHOD ?= soft_vote
 TOP_K ?= 4
 
 .DEFAULT_GOAL := help
-.PHONY: help setup pull review split freeze verify explore tune ensemble \
+.PHONY: help setup pull review split freeze verify explore tune features ensemble \
 	test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
 
 help: ## Show this help
@@ -66,6 +66,10 @@ explore: setup ## Step 5: EDA on the frozen train split -> reports/02_explore.md
 
 tune: setup ## Step 6: CV model search; appends to experiments/results.csv
 	$(PYTHON) -m titanic_agent.tune --model $(MODEL) --n-iter $(N_ITER) --cv-folds $(CV_FOLDS) --seed $(SEED)
+
+MAX_TESTS ?= 50
+features: setup ## Greedy add/prune feature selection vs one fixed model (needs an open experiment)
+	$(PYTHON) -m titanic_agent.features --max-tests $(MAX_TESTS)
 
 ensemble: setup ## Step 7: combine the best models -> reports/submission.csv
 	$(PYTHON) -m titanic_agent.ensemble --method $(METHOD) --top-k $(TOP_K) --cv-folds $(CV_FOLDS)
@@ -129,8 +133,8 @@ experiments: setup ## List every experiment and its scores
 experiment-open: setup ## Start an experiment: make experiment-open NAME="wide search"
 	@$(PYTHON) -m titanic_agent.experiments open "$(NAME)"
 
-experiment-evaluate: setup ## Score the open experiment on its own val split, ONCE
-	@$(PYTHON) -m titanic_agent.experiments evaluate
+experiment-evaluate: setup ## Score the open experiment's val split, ONCE. Options: RUN=<run id>
+	@$(PYTHON) -m titanic_agent.experiments evaluate $(if $(RUN),--run-id $(RUN))
 
 experiment-close: setup ## Close the open experiment: make experiment-close SUMMARY="..."
 	@$(PYTHON) -m titanic_agent.experiments close --summary "$(SUMMARY)"

@@ -173,6 +173,7 @@ def check_external_reads(package_dir: Path | None = None) -> LeakageCheck:
 #: as "best cv", which the cold-start session caught.
 METRIC_BY_STEP: dict[str, str] = {
     "tune": "cv",
+    "features": "cv",
     "ensemble": "cv",
     "evaluate": "val",
 }

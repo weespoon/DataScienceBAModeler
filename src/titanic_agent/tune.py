@@ -93,7 +93,12 @@ def add_derived(frame):
         if "Cabin" in derived.columns
         else "Unknown"
     )
-    return derived
+    # Candidates under test by `make features`. Declared here so every column
+    # anything can model on comes from one function — which is also what lets
+    # `make leakage` vouch for them.
+    from . import features
+
+    return features.add_candidates(derived)
 
 
 def resolve_features(frame, features: list[str] | None = None) -> list[str]:
@@ -112,7 +117,10 @@ def resolve_features(frame, features: list[str] | None = None) -> list[str]:
     if features is None:
         features = explore.load_candidates() or None
     if features is None:
-        features = [column for column in frame.columns if column not in EXCLUDED]
+        from .features import CANDIDATES
+
+        # Candidates are opt-in: they enter a feature list only by passing a test.
+        features = [c for c in frame.columns if c not in EXCLUDED and c not in CANDIDATES]
     return [column for column in features if column in frame.columns and column not in EXCLUDED]
 
 

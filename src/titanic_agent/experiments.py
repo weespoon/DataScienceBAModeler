@@ -380,6 +380,7 @@ def require_val_unread(experiment_id: str, path: Path | None = None) -> None:
 def evaluate(
     experiment_id: str | None = None,
     *,
+    run_id: str | None = None,
     frozen_dir: Path = paths.FROZEN_DIR,
     log_path: Path = paths.RESULTS_LOG,
 ) -> Experiment:
@@ -393,9 +394,14 @@ def evaluate(
     model or an ensemble — refits it on the experiment's training rows, and
     scores the held-back rows exactly once.
 
+    ``run_id`` pre-declares the row to score instead. Without it, the val read
+    measures whatever won CV — often not the thing the experiment changed, and
+    in a feature search, possibly a test the selection rule *rejected*.
+
     Raises:
-        RuntimeError: No experiment, nothing to evaluate, or the validation
-            split has already been read.
+        RuntimeError: No experiment, nothing to evaluate, the validation split
+            has already been read, or ``run_id`` is not a scored row of this
+            experiment.
     """
     from . import ensemble as ensemble_module
     from . import results_log, run_log
@@ -417,7 +423,16 @@ def evaluate(
             "Run `make loop` first — there is nothing to measure yet."
         )
 
-    best = scored.loc[scored["cv_score"].astype(float).idxmax()]
+    if run_id is None:
+        best = scored.loc[scored["cv_score"].astype(float).idxmax()]
+    else:
+        declared = scored[scored["run_id"].astype(str) == run_id]
+        if not len(declared):
+            raise RuntimeError(
+                f"{run_id} is not a scored run of {experiment.experiment_id}; "
+                "the validation read is unspent."
+            )
+        best = declared.iloc[0]
     train, val = load_frames(experiment, frozen_dir=frozen_dir)
     features = tune_module.resolve_features(train, (best["params"] or {}).get("features"))
 
@@ -453,7 +468,8 @@ def evaluate(
         holdout_read=False,  # the FINAL test is untouched; this is the val split
         notes=(
             f"validation score for {experiment.experiment_id} on {len(val)} held-back rows; "
-            f"best cv was {float(best['cv_score']):.4f}"
+            + (f"pre-declared row {run_id}, " if run_id else "")
+            + f"its cv was {float(best['cv_score']):.4f}"
         ),
         path=log_path,
     )
@@ -618,7 +634,8 @@ def main(argv: list[str] | None = None) -> int:
     opener.add_argument("--seed", type=int, default=None)
     opener.add_argument("--val-frac", type=float, default=0.2)
 
-    sub.add_parser("evaluate", help="score the open experiment on its own val split, once")
+    evaluator = sub.add_parser("evaluate", help="score the open experiment's val split, once")
+    evaluator.add_argument("--run-id", default=None, help="pre-declared ledger row to score")
 
     closer = sub.add_parser("close", help="finish the open experiment")
     closer.add_argument("--summary", default="")
@@ -637,7 +654,7 @@ def main(argv: list[str] | None = None) -> int:
             write_index()
             return 0
         if args.command == "evaluate":
-            experiment = evaluate()
+            experiment = evaluate(run_id=args.run_id)
             print(
                 f"{experiment.experiment_id} validation: {experiment.val_score:.4f} "
                 f"on {len(experiment.val_ids)} held-back rows (cv was {experiment.best_cv:.4f})"

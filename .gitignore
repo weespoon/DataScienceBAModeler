@@ -102,3 +102,7 @@ runs/**/submission.csv
 
 # Redaction term list: naming what is hidden would publish it
 scripts/redact_terms.txt
+
+# Raw session exports dropped in the repo root. Transcripts only enter the
+# repo after scripts/redact.py AND a human read -- see conversations/README.md.
+/20??-??-??-*.txt
