@@ -271,13 +271,22 @@ def ensemble(
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import StratifiedKFold, cross_val_score
 
-    from . import freeze, receipts, results_log, run_log
+    from . import freeze, receipts, results_log, run_log, runs
     from . import tune as tune_module
 
     if method not in METHODS:
         raise ValueError(f"unknown method {method!r}; expected one of {METHODS}")
 
     manifest = freeze.require_frozen(frozen_dir)
+
+    # This pass's artifacts go in its own run directory; reports/ keeps the
+    # latest copy so paths already written into the skills keep resolving.
+    runs.write_metadata()
+    if Path(submission_path).parent == paths.REPORTS_DIR:
+        submission_path = runs.run_dir() / Path(submission_path).name
+    if Path(report_path).parent == paths.REPORTS_DIR:
+        report_path = runs.run_dir() / Path(report_path).name
+
     members = select_members(log_path=log_path) if members is None else members
     if len(members) < 2:
         raise ValueError(
@@ -395,6 +404,10 @@ def ensemble(
         + "\n",
         encoding="utf-8",
     )
+    if report_path.parent.parent == paths.RUNS_DIR:
+        for artifact in (report_path, report_path.with_suffix(".json"), written):
+            runs.publish(artifact)
+
     run_log.record("step_finished", step="ensemble", detail=f"cv={cv_score:.4f}", run_id=run_id)
     return result
 

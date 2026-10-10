@@ -91,3 +91,11 @@ ipython_config.py
 
 # Advisory file locks guarding the append-only artifacts (see locking.py)
 *.lock
+
+# ---- Per-pass run directories ----
+# The textual record of each pass is committed: run.md, metadata.json and the
+# step reports are small and genuinely differ between passes. The charts are
+# not: the data is frozen and the seed is fixed, so every pass regenerates
+# byte-identical PNGs, and reports/ already holds the latest copy of each.
+runs/**/*.png
+runs/**/submission.csv

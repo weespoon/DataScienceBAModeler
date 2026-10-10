@@ -287,12 +287,19 @@ def explore(
     matplotlib.use("Agg")  # headless; must precede the pyplot import
     import pandas as pd
 
-    from . import freeze
+    from . import freeze, runs
 
     freeze.require_frozen(frozen_dir)
+    runs.write_metadata()
 
     # Only train.csv. Never holdout.csv -- not even to count its rows.
     train = pd.read_csv(Path(frozen_dir) / "train.csv")
+    # Charts and the report land in this pass's run directory; reports/ keeps a
+    # copy as the latest view so existing paths in the skills keep resolving.
+    # Without this, every loop overwrote the previous pass's seven charts.
+    if reports_dir == paths.REPORTS_DIR:
+        reports_dir = runs.run_dir()
+        report_path = reports_dir / Path(report_path).name
     reports_dir = Path(reports_dir)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -395,6 +402,10 @@ def explore(
         + "\n",
         encoding="utf-8",
     )
+
+    if reports_dir.parent == paths.RUNS_DIR:
+        for artifact in (*result.charts, report_path, report_path.with_suffix(".json")):
+            runs.publish(artifact)
     return result
 
 

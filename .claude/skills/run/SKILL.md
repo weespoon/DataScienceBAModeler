@@ -132,5 +132,9 @@ Finish with a short summary a human can read without opening anything:
 - anything refused, and what you would need in order to proceed;
 - anything surprising — especially results that went the wrong way.
 
-Then print the ledger (`make log`) and the journal
-(`make journal`).
+Then print the ledger (`make log`) and the journal (`make journal`).
+
+Each pass also writes `runs/<id>/run.md` — scores, decisions, refusals and
+artifacts for that pass alone, derived from the global ledger and journal rather
+than copied, because two records of the same events can disagree and then
+neither can be trusted. `make runs` lists every pass.

@@ -25,13 +25,18 @@ with its inputs, outputs and done criteria — read that skill before running a 
 | 2 | `review` | `review.py` | `data/raw/` | `reports/01_review.md` |
 | 3 | `split` | `split.py` | `data/raw/train.csv` | `data/frozen/split_plan.json` |
 | 4 | `freeze` | `freeze.py` | `data/raw/`, split plan | `data/frozen/*.csv`, `MANIFEST.json` |
-| 5 | `explore` | `explore.py` | `data/frozen/train.csv` | `reports/02_explore.md`, charts |
+| 5 | `explore` | `explore.py` | `data/frozen/train.csv` | `runs/<id>/02_explore.md`, charts |
 | 6 | `tune` | `tune.py` | `data/frozen/train.csv` | rows in `experiments/results.csv` |
-| 7 | `ensemble` | `ensemble.py` | ledger, `data/frozen/` | ledger row, `reports/submission.csv` |
+| 7 | `ensemble` | `ensemble.py` | ledger, `data/frozen/` | ledger row, `runs/<id>/submission.csv` |
 
-`make <step>` runs any single step; `make all` runs steps 2–7 in order. Don't
-skip ahead — step 6 is meaningless before step 4, because a score with no frozen
-fingerprint cannot be compared to anything.
+`make <step>` runs any single step. **`make bootstrap`** runs steps 2–4 once —
+`freeze` refuses to run twice, so it can never sit in a loop. **`make loop`**
+runs steps 5–7 and is the repeatable part. (There is no `make all`; it used to
+exist and was removed precisely because it put `freeze` inside something meant
+to be re-run.)
+
+Don't skip ahead — step 6 is meaningless before step 4, because a score with no
+frozen fingerprint cannot be compared to anything.
 
 ## Rule 1 — the frozen dataset is immutable
 
@@ -85,7 +90,12 @@ chmod 0444 and every one is checksummed in the manifest.
   Never hand-edit the CSV, never rewrite or delete rows, never reorder columns
   (append new ones at the end so old rows stay readable).
 - Columns: `run_id`, `timestamp_utc`, `step`, `model`, `params`, `cv_score`,
-  `cv_std`, `cv_folds`, `seed`, `frozen_sha256`, `git_sha`, `notes`.
+  `cv_std`, `cv_folds`, `seed`, `frozen_sha256`, `git_sha`, `holdout_read`,
+  `notes`, `pass_id`, `prev_sha`.
+- `prev_sha` chains each row to the hash of the line above it, so a deleted or
+  edited row breaks the chain and `make audit` says so. Appends are locked;
+  without the lock two concurrent sessions fork the chain and the audit reports
+  tampering that never happened.
 - Log failures too, with the error in `notes` and an empty `cv_score`. A failed
   configuration is a result; silently dropping it makes the sweep a lie.
 - A row cannot be edited, so a correction is an **amendment, not an edit**:
@@ -104,6 +114,7 @@ chmod 0444 and every one is checksummed in the manifest.
 - The default seed is `paths.SEED`. Pass it to every estimator and every split.
 - Reports are numbered by step (`01_review.md`, `02_explore.md`, `03_ensemble.md`)
   and are regenerable — `make clean` deletes them and that must be harmless.
+  Steps 5 and 7 write into `runs/<id>/` and publish a copy to `reports/`.
 - Charts: matplotlib only, `Agg` backend, one chart per figure, always
   `plt.close()`. Keep figures legible at ~110 dpi.
 - `make test` before any commit. `make lint` for style.
@@ -134,6 +145,25 @@ full autonomous run with a legible trail, not a perfect leaderboard score.
 But "keep going" stops at the tripwires above, and at anything irreversible that
 this file does not cover. The test is not *is this a good idea* — it is *can a
 human undo it tomorrow*. If not, ask.
+
+## Where things are written
+
+| | Lives in | Why |
+|---|---|---|
+| This pass's charts, step reports, submission, `run.md` | `runs/<id>/` | Per-pass, regenerable, safe to delete |
+| Latest copy of each | `reports/` | The always-current view |
+| The ledger, holdout receipts, the journal | `experiments/` | **Global and append-only** |
+
+That last row is not a filing preference. Put holdout receipts inside a run
+directory and "the holdout is read once per frozen dataset" silently becomes
+"once per *run*": every pass sees an empty receipts file, reads the holdout, and
+passes its own audit. Unlimited reads, all green. Split the ledger the same way
+and you can no longer compare passes, while the hash chain stops noticing a
+deleted run. **Artifacts are per-pass; evidence is global.**
+
+A run id (`20261010-1446EDT`) is also the `pass_id` on every ledger row and
+journal entry that pass wrote, so `ls runs/<id>/` and
+`make journal --pass-id <id>` name the same thing.
 
 ## Orchestration
 

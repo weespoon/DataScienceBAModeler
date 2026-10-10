@@ -20,7 +20,7 @@ TOP_K ?= 4
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune ensemble \
-	test lint log status next journal receipts audit bootstrap loop clean distclean
+	test lint log status next journal receipts audit runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -86,9 +86,17 @@ log: setup ## Print the experiment ledger
 bootstrap: review split freeze ## Steps 2-4, run ONCE: audit, split, seal the data
 	@echo "bootstrap complete -- data is frozen. From here on, use: make loop"
 
-loop: export TITANIC_PASS_ID := pass-$(shell date -u +%Y%m%dT%H%M%S)
+# One id per pass, shared by all three steps and used as the run directory name.
+loop: export TITANIC_PASS_ID := $(shell date +%Y%m%d-%H%M%Z)
 loop: explore tune ensemble ## Steps 5-7, repeatable: the autonomous iterate loop
+	@$(PYTHON) -m titanic_agent.runs --summarize
 	@echo "pass $(TITANIC_PASS_ID) complete -- make audit to check the rules held"
+
+runs: setup ## List every pass and how many artifacts it left
+	@$(PYTHON) -m titanic_agent.runs
+
+summary: setup ## Rewrite this pass's runs/<id>/run.md from the ledger and journal
+	@$(PYTHON) -m titanic_agent.runs --summarize
 
 status: setup ## Which pipeline steps have completed, derived from artifacts on disk
 	@$(PYTHON) -m titanic_agent.status

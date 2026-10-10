@@ -18,12 +18,11 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import paths, runs
 
 #: Event kinds. Kept small on purpose; a vocabulary nobody can remember gets
 #: used inconsistently and the journal stops being comparable across runs.
@@ -55,21 +54,20 @@ DEFAULT_LEVEL: dict[str, str] = {
     "note": "info",
 }
 
-#: Generated once per process. An ad-hoc single-step run genuinely is its own
-#: pass; only `make loop` has reason to span several processes, and it does that
-#: by exporting TITANIC_PASS_ID.
-_PROCESS_PASS_ID = f"adhoc-{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:4]}"
-
 #: Environment variable `make loop` sets so one iteration shares an id.
-PASS_ID_ENV = "TITANIC_PASS_ID"
+PASS_ID_ENV = runs.RUN_ID_ENV
+
+#: Minted once per process, so a single step run by hand keeps one id for its
+#: whole life rather than a new one per journal line.
+_PROCESS_PASS_ID = runs.mint_run_id()
 
 
 def current_pass_id() -> str:
     """The id grouping one loop iteration across its separate processes.
 
-    ``make loop`` runs explore, tune and ensemble as three python invocations.
-    Without a shared id, "what did pass 2 do?" is unanswerable — which is why
-    there is no per-run report yet. This is the enabler for one.
+    The same string names this pass's run directory, so
+    ``make journal --pass-id X`` and ``ls runs/X/`` agree. One identifier is
+    worth more than two that have to be kept in step.
     """
     return os.environ.get(PASS_ID_ENV) or _PROCESS_PASS_ID
 

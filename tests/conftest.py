@@ -266,7 +266,14 @@ def _never_touch_real_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     Belt and braces: a test should not be able to reach these paths even by
     accident, and relying on every call site remembering to pass an override is
     exactly the kind of discipline that fails quietly.
+
+    It failed a second time, too. This guard originally named three paths by
+    hand; ``RUNS_DIR`` arrived later and was not added, so the suite created 53
+    stray run directories before ``make runs`` showed them. The list now lives
+    in :data:`titanic_agent.paths.WRITABLE_ARTIFACTS` and is iterated, so a new
+    artifact is covered by declaring it rather than by remembering this file.
     """
-    monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "artifacts" / "run_log.jsonl")
-    monkeypatch.setattr(paths, "HOLDOUT_READS", tmp_path / "artifacts" / "holdout_reads.json")
-    monkeypatch.setattr(paths, "RESULTS_LOG", tmp_path / "artifacts" / "results.csv")
+    sandbox = tmp_path / "artifacts"
+    for attribute in paths.WRITABLE_ARTIFACTS:
+        real = getattr(paths, attribute)
+        monkeypatch.setattr(paths, attribute, sandbox / real.name)

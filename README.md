@@ -64,8 +64,11 @@ Requires Python 3.11+.
 make setup     # create .venv, install the package editable
 make test      # smoke tests
 make pull      # needs Kaggle credentials -- see .claude/skills/pull/SKILL.md
-make all       # steps 2-7, in order
-make log       # read the experiment ledger
+make bootstrap # steps 2-4, ONCE: audit, split, seal the data
+make loop      # steps 5-7, repeatable (~18s)
+make log       # the experiment ledger
+make audit     # did the three rules hold?
+make runs      # every pass and what it left behind
 ```
 
 `make help` lists every target.
@@ -90,8 +93,10 @@ CPU in seconds.
 ├── .claude/hooks/          # PreToolUse hook enforcing rule 1 in the harness
 ├── data/raw/               # gitignored -- raw download
 ├── data/frozen/            # gitignored -- immutable after `freeze`
-├── experiments/results.csv # append-only experiment ledger
+├── runs/<id>/              # one directory per pass: charts, reports, run.md
+├── experiments/results.csv # append-only, hash-chained experiment ledger
 ├── experiments/holdout_reads.json  # one receipt per holdout read (rule 2)
+├── experiments/run_log.jsonl       # the agent's own journal, by severity
 ├── reports/                # generated charts and markdown summaries (committed)
 ├── src/titanic_agent/      # one module per step, plus paths.py and results_log.py
 └── tests/                  # a smoke test per module

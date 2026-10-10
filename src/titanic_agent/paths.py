@@ -16,6 +16,10 @@ DATA_DIR: Path = ROOT / "data"
 RAW_DIR: Path = DATA_DIR / "raw"
 FROZEN_DIR: Path = DATA_DIR / "frozen"
 REPORTS_DIR: Path = ROOT / "reports"
+
+#: One directory per pass over the loop. Artifacts live here; evidence does not.
+#: See :mod:`titanic_agent.runs` for why that split matters.
+RUNS_DIR: Path = ROOT / "runs"
 EXPERIMENTS_DIR: Path = ROOT / "experiments"
 
 #: Kaggle competition slug used by :mod:`titanic_agent.pull`.
@@ -47,6 +51,23 @@ RUN_LOG: Path = EXPERIMENTS_DIR / "run_log.jsonl"
 #: Default random seed. Change it only with a recorded reason — the split that
 #: produced the frozen holdout is reproducible from this value plus MANIFEST.json.
 SEED: int = 20251010
+
+
+#: Every path a pipeline run writes into. The test suite redirects all of them
+#: into tmp_path (see the autouse guard in tests/conftest.py), so a test can
+#: never touch the real ledger, receipts, journal, reports or run directories.
+#:
+#: This list exists because the guard was first written naming three paths by
+#: hand; `RUNS_DIR` was added later and the guard was not, so the suite quietly
+#: created 53 stray run directories. A guard that has to be remembered is a
+#: guard that will be forgotten — enumerate once, iterate everywhere.
+WRITABLE_ARTIFACTS: tuple[str, ...] = (
+    "RESULTS_LOG",
+    "HOLDOUT_READS",
+    "RUN_LOG",
+    "RUNS_DIR",
+    "REPORTS_DIR",
+)
 
 
 def ensure_dirs() -> None:
