@@ -23,6 +23,7 @@ dependencies = [
   "numpy>=1.26",
   "scikit-learn>=1.4",
   "matplotlib>=3.8",
+  "kaggle>=2.2.4",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,11 @@ dependencies = [
 # the only supported way to download competition data, and it is needed by
 # `pull` alone. Every other step runs without it, so it stays an extra --
 # drop the CSVs into data/raw/ by hand and the rest of the pipeline works.
+#
+# It is an extra and not a core dependency for a second reason: it pulls in
+# ~25 transitive packages, including jupytext, nbformat, protobuf and bleach.
+# That is a lot of surface for one download, and none of it belongs in the
+# environment that runs steps 2-7. Install with: make setup EXTRAS=dev,kaggle
 kaggle = ["kaggle>=1.6"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
@@ -65,3 +71,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # The fixture table is one CSV row per line on purpose — reflowing it makes the
 # miniature dataset much harder to read as a table.
 "tests/conftest.py" = ["E501"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

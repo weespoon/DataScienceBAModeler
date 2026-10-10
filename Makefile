@@ -3,10 +3,14 @@
 #   setup -> pull -> review -> split -> freeze -> explore -> tune -> ensemble
 # Run `make help` for the target list.
 
+# Setup prefers uv when it is on PATH (much faster, and it picks a compatible
+# interpreter itself); it falls back to the stdlib venv + pip otherwise. Either
+# way the result is the same: .venv with this package installed editable.
 PY ?= python3.13
 VENV := .venv
 BIN := $(VENV)/bin
 PYTHON := $(BIN)/python
+EXTRAS ?= dev
 SEED ?= 20251010
 CV_FOLDS ?= 5
 N_ITER ?= 25
@@ -23,14 +27,25 @@ help: ## Show this help
 
 setup: $(VENV)/.installed ## Create .venv and install the package (editable) + dev deps
 
+# Re-runs whenever pyproject.toml changes, or when the sentinel is missing --
+# which is also how it recovers if .venv was replaced by something else.
 $(VENV)/.installed: pyproject.toml
-	$(PY) -m venv $(VENV)
-	$(BIN)/python -m pip install --quiet --upgrade pip
-	$(BIN)/python -m pip install --quiet -e '.[dev]'
+	@if command -v uv >/dev/null 2>&1; then \
+		echo "uv found: uv venv + uv pip install -e '.[$(EXTRAS)]'"; \
+		uv venv --python '>=3.11' --allow-existing $(VENV); \
+		uv pip install --quiet --python $(PYTHON) -e '.[$(EXTRAS)]'; \
+	else \
+		echo "uv not found: stdlib venv + pip install -e '.[$(EXTRAS)]'"; \
+		$(PY) -m venv $(VENV); \
+		$(PYTHON) -m pip install --quiet --upgrade pip; \
+		$(PYTHON) -m pip install --quiet -e '.[$(EXTRAS)]'; \
+	fi
 	@touch $@
 	@echo "env ready: $(VENV) ($$($(PYTHON) --version))"
 
 pull: setup ## Step 1: download the raw data into data/raw (gitignored)
+	@$(PYTHON) -c 'import kaggle' 2>/dev/null \
+		|| { echo "step 1 needs the optional kaggle extra: make setup EXTRAS=dev,kaggle"; exit 1; }
 	$(PYTHON) -m titanic_agent.pull
 
 review: setup ## Step 2: audit raw data -> reports/01_review.md
