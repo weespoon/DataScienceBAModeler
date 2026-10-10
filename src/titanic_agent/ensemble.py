@@ -84,20 +84,40 @@ def select_members(
         One dict per member with its model key and params, ready for
         :func:`titanic_agent.tune.build_pipeline`.
 
-    Only rows whose ``frozen_sha256`` matches the current manifest are eligible:
-    a score computed against different bytes is not comparable to one computed
-    against these.
+    Eligibility is narrower than it looks, and both halves matter:
+
+    ``frozen_sha256`` must match the current manifest — a score computed against
+    different bytes is not comparable to one computed against these.
+
+    ``experiment_id`` must match the open experiment. This one was missing, and
+    the omission was a real leak: an experiment trains on its own 569 rows but
+    was free to ensemble members tuned by an *earlier* experiment on the full
+    712, which include the current experiment's 143 validation rows. The
+    hyperparameters would then have been chosen using the very rows the
+    validation score is supposed to be independent of, and the resulting number
+    is a selection statistic wearing a measurement's clothes.
+
+    With no experiment open, rows that belong to one are excluded instead, so a
+    hand-run ensemble cannot silently inherit an experiment's work either.
     """
-    from . import freeze, results_log
+    from . import experiments, freeze, results_log
 
     manifest = freeze.require_frozen()
     frame = results_log.read_log(log_path)
     if frame.empty:
         return []
 
+    current = experiments.current_experiment()
+    owner = current.experiment_id if current else ""
+    # fillna BEFORE astype: a missing experiment_id becomes NaN on read, and
+    # .astype(str) turns that into the literal string "nan", which then compares
+    # equal to nothing and silently excluded every pre-container row.
+    row_owner = frame["experiment_id"].fillna("").astype(str)
+
     eligible = frame[
         (frame["step"] == "tune")
         & (frame["frozen_sha256"] == manifest.dataset_sha256)
+        & (row_owner == owner)
         & (~frame["model"].isin(NEVER_MEMBERS))
     ].dropna(subset=["cv_score"])
     if eligible.empty:

@@ -20,7 +20,7 @@ TOP_K ?= 4
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune ensemble \
-	test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-close findings backlog runs summary bootstrap loop clean distclean
+	test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -124,6 +124,9 @@ experiments: setup ## List every experiment and its scores
 
 experiment-open: setup ## Start an experiment: make experiment-open NAME="wide search"
 	@$(PYTHON) -m titanic_agent.experiments open "$(NAME)"
+
+experiment-evaluate: setup ## Score the open experiment on its own val split, ONCE
+	@$(PYTHON) -m titanic_agent.experiments evaluate
 
 experiment-close: setup ## Close the open experiment: make experiment-close SUMMARY="..."
 	@$(PYTHON) -m titanic_agent.experiments close --summary "$(SUMMARY)"

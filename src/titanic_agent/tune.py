@@ -229,17 +229,28 @@ def search_space(model_key: str) -> dict[str, list[Any]]:
 
 
 def load_training_frame(frozen_dir: Path = paths.FROZEN_DIR):
-    """Load the frozen training split, verified, with derived features added.
+    """The rows this step may train on, verified, with derived features added.
 
-    Reads ``train.csv`` only. ``holdout.csv`` is not opened here and must not be:
-    this module has no legitimate reason to touch it.
+    When an experiment is open, that is **its** training rows — a subset of the
+    working set, with the rest held back as that experiment's validation split.
+    With no experiment open, it is the whole working set, which is how the
+    baseline ran and how a single step invoked by hand still behaves.
+
+    Reads ``train.csv`` only. ``holdout.csv`` is the final test and this module
+    has no legitimate reason to touch it; the experiment's validation rows are
+    inside ``train.csv`` but excluded here, which is the point.
     """
     import pandas as pd
 
-    from . import freeze
+    from . import experiments, freeze
 
     freeze.require_frozen(frozen_dir)
-    return add_derived(pd.read_csv(Path(frozen_dir) / "train.csv"))
+    working = add_derived(pd.read_csv(Path(frozen_dir) / "train.csv"))
+
+    experiment = experiments.current_experiment()
+    if experiment is None or not experiment.train_ids:
+        return working
+    return working.set_index("PassengerId", drop=False).loc[experiment.train_ids]
 
 
 def tune(

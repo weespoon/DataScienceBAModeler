@@ -10,6 +10,8 @@ Neither is the final test, which is read once for the whole programme.
 | experiment | status | train/val | best cv | val | summary |
 | --- | --- | --- | --- | --- | --- |
 | `exp-001-baseline` | closed | 569/143 | 0.8287 | — | Baseline sweep of 8 models + soft-vote ensemble. CV over the full 712-row working set; predates per-experiment val splits, so it has no val score. |
+| `exp-002-wider-search` | abandoned | 569/143 | 0.8278 | 0.8392 | ABANDONED: its validation score was contaminated. select_members inherited members tuned on the full working set, which includes this experiment's own validation rows. Bug fixed; a fresh split is needed, so exp-003 supersedes it. |
+| `exp-003-wider-search` | closed | 569/143 | 0.8190 | 0.8462 | Re-run of exp-002 after fixing the member-scoping leak. CV 0.8190, val 0.8462 on 143 rows. No technique changed; this establishes a clean baseline under the experiment container. |
 
 ## The final test
 

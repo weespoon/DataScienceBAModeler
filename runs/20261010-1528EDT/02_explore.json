@@ -1,0 +1,40 @@
+{
+  "baseline_accuracy": 0.6165730337078652,
+  "candidate_features": [
+    "Sex",
+    "Pclass",
+    "Age",
+    "Fare",
+    "SibSp",
+    "Parch",
+    "Embarked",
+    "FamilySize",
+    "IsAlone",
+    "Title",
+    "Deck",
+    "AgeMissing"
+  ],
+  "derived_rationale": {
+    "FamilySize": "SibSp + Parch + 1; survival is non-monotonic in family size, so the raw counts split the signal in two.",
+    "IsAlone": "FamilySize == 1; a single threshold that the trees find anyway but linear models cannot express.",
+    "Title": "Extracted from Name (Mr/Mrs/Miss/Master/rare). Carries sex and rough age together, and survives Age being 20% missing.",
+    "Deck": "First letter of Cabin, with a missing category. Cabin itself is 77% missing and near-unique among observed rows, so the letter is the only part that generalises.",
+    "AgeMissing": "Indicator for a missing Age. Whether the age was recorded is itself informative; imputing it away discards that."
+  },
+  "excluded_raw": [
+    "Name",
+    "Ticket",
+    "Cabin",
+    "PassengerId"
+  ],
+  "charts": [
+    "02_rate_sex.png",
+    "02_rate_pclass.png",
+    "02_rate_embarked.png",
+    "02_rate_family_size.png",
+    "02_dist_age.png",
+    "02_dist_fare.png",
+    "02_missingness.png"
+  ],
+  "holdout_read": false
+}

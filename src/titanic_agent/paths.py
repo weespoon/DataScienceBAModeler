@@ -55,6 +55,11 @@ FINDINGS: Path = EXPERIMENTS_DIR / "findings.jsonl"
 #: Human index of every experiment, derived from their manifests.
 EXPERIMENTS_INDEX: Path = EXPERIMENTS_DIR / "EXPERIMENTS.md"
 
+#: Append-only record of every validation read. Routine and autonomous, unlike
+#: the final test — but still recorded, because reading a val split twice within
+#: one experiment is adaptive overfitting at the experiment level.
+VAL_READS: Path = EXPERIMENTS_DIR / "val_reads.jsonl"
+
 #: Append-only record of every time the ledger's hash chain was rebuilt. A
 #: schema migration rewrites every line and so necessarily breaks the chain;
 #: rather than pretend otherwise, the rebuild is recorded and the audit reports
@@ -82,6 +87,7 @@ WRITABLE_ARTIFACTS: tuple[str, ...] = (
     "FINDINGS",
     "EXPERIMENTS_INDEX",
     "CHAIN_EPOCHS",
+    "VAL_READS",
     "RUNS_DIR",
     "REPORTS_DIR",
 )

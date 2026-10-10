@@ -166,6 +166,26 @@ def audit(
         )
     )
 
+    # ---- Rule 2, the cheap half: one val read per experiment ---------------- #
+    from . import experiments as experiments_module
+
+    overspent = [
+        (e.experiment_id, len(experiments_module.val_reads_for(e.experiment_id)))
+        for e in experiments_module.list_experiments()
+    ]
+    offenders = [f"{eid} read its val {n}x" for eid, n in overspent if n > 1]
+    if overspent:
+        checks.append(
+            Check(
+                "rule 2 · one val read per experiment",
+                not offenders,
+                f"{sum(n for _, n in overspent)} val read(s) across {len(overspent)} experiment(s)"
+                if not offenders
+                else "; ".join(offenders)
+                + " — a second read on the same rows is selection, not measurement",
+            )
+        )
+
     # ---- Rule 4: no looking up the answers --------------------------------- #
     from . import leakage
 

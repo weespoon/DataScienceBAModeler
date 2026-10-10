@@ -287,3 +287,128 @@ def test_the_manifest_is_valid_json(sandbox: Path, frozen_dir: Path) -> None:
     payload = json.loads((exp.directory / "experiment.json").read_text(encoding="utf-8"))
     assert payload["experiment_id"] == exp.experiment_id
     assert payload["val_ids"]
+
+
+# --------------------------------------------------------------------------- #
+# the val read, and the leak that made exp-002 worthless
+# --------------------------------------------------------------------------- #
+
+
+def test_tune_trains_on_the_experiment_rows_when_one_is_open(
+    sandbox: Path, frozen_dir: Path
+) -> None:
+    from titanic_agent import tune
+
+    full = len(tune.load_training_frame(frozen_dir))
+    exp = experiments.open_experiment("scoped", frozen_dir=frozen_dir)
+    assert len(tune.load_training_frame(frozen_dir)) == len(exp.train_ids) < full
+
+
+def test_ensemble_members_never_cross_experiments(
+    sandbox: Path, frozen_dir: Path, log_path: Path
+) -> None:
+    # The leak that made exp-002's validation score a selection statistic: an
+    # experiment trains on its own 569 rows, but could ensemble members tuned by
+    # an earlier experiment on the full working set -- which contains this
+    # experiment's validation rows.
+    from titanic_agent import ensemble, results_log
+
+    for model in ("logistic", "knn"):
+        results_log.append_run(
+            step="tune",
+            model=model,
+            cv_score=0.99,
+            experiment_id="exp-000-someone-else",
+            path=log_path,
+        )
+    exp = experiments.open_experiment("mine", frozen_dir=frozen_dir)
+    results_log.append_run(
+        step="tune",
+        model="logistic",
+        cv_score=0.80,
+        experiment_id=exp.experiment_id,
+        path=log_path,
+    )
+    members = ensemble.select_members(log_path=log_path, top_k=9)
+    assert [m["model"] for m in members] == ["logistic"]
+    assert members[0]["cv_score"] == 0.80  # ours, not the other experiment's 0.99
+
+
+def test_a_second_val_read_in_one_experiment_is_refused(
+    sandbox: Path, frozen_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # Val splits are cheap across experiments and expensive within one: the same
+    # 142 rows, read twice with a model chosen in between, is selection.
+    monkeypatch.setattr(paths, "VAL_READS", tmp_path / "val_reads.jsonl")
+    exp = experiments.open_experiment("once", frozen_dir=frozen_dir)
+    experiments.record_val_read(
+        experiment_id=exp.experiment_id, score=0.84, model="rf", run_id="run-1"
+    )
+    with pytest.raises(RuntimeError, match="already read its validation"):
+        experiments.require_val_unread(exp.experiment_id)
+
+
+def test_val_reads_are_scoped_per_experiment(
+    sandbox: Path, frozen_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(paths, "VAL_READS", tmp_path / "val_reads.jsonl")
+    experiments.record_val_read(experiment_id="exp-001-a", score=0.8, model="rf", run_id="r1")
+    experiments.require_val_unread("exp-002-b")  # a different experiment is unaffected
+    assert len(experiments.val_reads_for("exp-001-a")) == 1
+    assert experiments.val_reads_for("exp-002-b") == []
+
+
+def test_evaluate_refuses_with_nothing_scored(
+    sandbox: Path, frozen_dir: Path, log_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from titanic_agent import results_log
+
+    monkeypatch.setattr(paths, "VAL_READS", tmp_path / "val_reads.jsonl")
+    results_log.ensure_log(log_path)
+    experiments.open_experiment("empty", frozen_dir=frozen_dir)
+    with pytest.raises(RuntimeError, match="no scored runs"):
+        experiments.evaluate(frozen_dir=frozen_dir, log_path=log_path)
+
+
+def test_evaluate_spends_exactly_one_val_read(
+    sandbox: Path, frozen_dir: Path, log_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from titanic_agent import tune
+
+    monkeypatch.setattr(paths, "VAL_READS", tmp_path / "val_reads.jsonl")
+    exp = experiments.open_experiment("real", frozen_dir=frozen_dir)
+    tune.tune("dummy", frozen_dir=frozen_dir, log_path=log_path, cv_folds=2)
+
+    evaluated = experiments.evaluate(frozen_dir=frozen_dir, log_path=log_path)
+    assert evaluated.val_score is not None
+    assert len(experiments.val_reads_for(exp.experiment_id)) == 1
+
+    with pytest.raises(RuntimeError, match="already read its validation"):
+        experiments.evaluate(frozen_dir=frozen_dir, log_path=log_path)
+
+
+def test_evaluate_leaves_the_final_test_untouched(
+    sandbox: Path, frozen_dir: Path, log_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from titanic_agent import receipts, tune
+
+    monkeypatch.setattr(paths, "VAL_READS", tmp_path / "val_reads.jsonl")
+    monkeypatch.setattr(paths, "HOLDOUT_READS", tmp_path / "holdout_reads.json")
+    experiments.open_experiment("real", frozen_dir=frozen_dir)
+    tune.tune("dummy", frozen_dir=frozen_dir, log_path=log_path, cv_folds=2)
+    experiments.evaluate(frozen_dir=frozen_dir, log_path=log_path)
+    assert receipts.read_receipts() == []
+
+
+def test_the_evaluate_row_attests_no_holdout_read(
+    sandbox: Path, frozen_dir: Path, log_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from titanic_agent import results_log, tune
+
+    monkeypatch.setattr(paths, "VAL_READS", tmp_path / "val_reads.jsonl")
+    experiments.open_experiment("real", frozen_dir=frozen_dir)
+    tune.tune("dummy", frozen_dir=frozen_dir, log_path=log_path, cv_folds=2)
+    experiments.evaluate(frozen_dir=frozen_dir, log_path=log_path)
+    frame = results_log.read_log(log_path)
+    row = frame[frame["step"] == "evaluate"].iloc[0]
+    assert not row["holdout_read"]

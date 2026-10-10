@@ -266,6 +266,171 @@ def load_frames(experiment: Experiment, *, frozen_dir: Path = paths.FROZEN_DIR):
     return indexed.loc[experiment.train_ids], indexed.loc[experiment.val_ids]
 
 
+def record_val_read(
+    *, experiment_id: str, score: float, model: str, run_id: str, path: Path | None = None
+) -> dict[str, Any]:
+    """Record that an experiment spent its validation read."""
+    target = Path(path) if path is not None else paths.VAL_READS
+    target.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "experiment_id": experiment_id,
+        "timestamp_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "score": round(float(score), 6),
+        "model": model,
+        "run_id": run_id,
+    }
+    from . import locking
+
+    with locking.locked(target), target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    return entry
+
+
+def val_reads_for(experiment_id: str, path: Path | None = None) -> list[dict[str, Any]]:
+    """Every validation read recorded against one experiment."""
+    target = Path(path) if path is not None else paths.VAL_READS
+    found: list[dict[str, Any]] = []
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError:
+        return found
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("experiment_id") == experiment_id:
+            found.append(entry)
+    return found
+
+
+def require_val_unread(experiment_id: str, path: Path | None = None) -> None:
+    """Refuse a second validation read within one experiment.
+
+    Validation splits are cheap *across* experiments — the next one draws
+    different rows. They are not cheap *within* one: reading the same 142 rows
+    twice, with a model chosen in between, is adaptive overfitting at the
+    experiment level and makes that experiment's number a selection statistic.
+
+    Raises:
+        RuntimeError: This experiment already read its validation split.
+    """
+    existing = val_reads_for(experiment_id, path)
+    if not existing:
+        return
+    first = existing[0]
+    raise RuntimeError(
+        f"{experiment_id} already read its validation split at "
+        f"{first.get('timestamp_utc', 'an unrecorded time')} "
+        f"(scored {first.get('score')}). Report that number, or open a new "
+        f"experiment — a second read on the same rows is selection, not measurement."
+    )
+
+
+def evaluate(
+    experiment_id: str | None = None,
+    *,
+    frozen_dir: Path = paths.FROZEN_DIR,
+    log_path: Path = paths.RESULTS_LOG,
+) -> Experiment:
+    """Score this experiment's chosen model on its own validation split. Once.
+
+    Autonomous by design: no human is asked, because a validation split is
+    re-drawable and the next experiment gets different rows. The locked final
+    test is the one that still stops for a person.
+
+    Picks whatever this experiment scored best in cross-validation — a tuned
+    model or an ensemble — refits it on the experiment's training rows, and
+    scores the held-back rows exactly once.
+
+    Raises:
+        RuntimeError: No experiment, nothing to evaluate, or the validation
+            split has already been read.
+    """
+    from . import ensemble as ensemble_module
+    from . import results_log, run_log
+    from . import tune as tune_module
+
+    experiment = load_experiment(experiment_id or _require_current().experiment_id)
+    require_val_unread(experiment.experiment_id)
+
+    frame = results_log.read_log(log_path)
+    rows = (
+        frame[frame["experiment_id"].astype(str) == experiment.experiment_id]
+        if not frame.empty and "experiment_id" in frame
+        else frame.iloc[0:0]
+    )
+    scored = rows.dropna(subset=["cv_score"]) if len(rows) else rows
+    if not len(scored):
+        raise RuntimeError(
+            f"{experiment.experiment_id} has no scored runs to evaluate. "
+            "Run `make loop` first — there is nothing to measure yet."
+        )
+
+    best = scored.loc[scored["cv_score"].astype(float).idxmax()]
+    train, val = load_frames(experiment, frozen_dir=frozen_dir)
+    features = tune_module.resolve_features(train, (best["params"] or {}).get("features"))
+
+    model_name = str(best["model"])
+    if model_name in tune_module.MODEL_KEYS:
+        estimator = tune_module.build_pipeline(model_name, seed=experiment.seed)
+        tunable = {k: v for k, v in (best["params"] or {}).items() if k.startswith("clf__")}
+        if tunable:
+            estimator.set_params(**tunable)
+    else:
+        # An ensemble row: rebuild it from the members recorded in its params.
+        members = ensemble_module.select_members(log_path=log_path)
+        if len(members) < 2:
+            raise RuntimeError(
+                f"{experiment.experiment_id} scored best with {model_name}, but its "
+                "members cannot be rebuilt from the ledger."
+            )
+        built = ensemble_module._build_members(members, seed=experiment.seed, features=features)
+        from sklearn.ensemble import VotingClassifier
+
+        estimator = VotingClassifier(estimators=built, voting="soft")
+
+    estimator.fit(train[features], train["Survived"])
+    score = float(estimator.score(val[features], val["Survived"]))
+
+    run_id = results_log.append_run(
+        step="evaluate",
+        model=model_name,
+        params={"features": features, "val_rows": len(val)},
+        cv_score=score,
+        cv_folds=None,
+        seed=experiment.seed,
+        holdout_read=False,  # the FINAL test is untouched; this is the val split
+        notes=(
+            f"validation score for {experiment.experiment_id} on {len(val)} held-back rows; "
+            f"best cv was {float(best['cv_score']):.4f}"
+        ),
+        path=log_path,
+    )
+    record_val_read(
+        experiment_id=experiment.experiment_id,
+        score=score,
+        model=model_name,
+        run_id=run_id,
+    )
+    run_log.record(
+        "decision",
+        step="evaluate",
+        detail=(
+            f"{experiment.experiment_id} validation: {score:.4f} on {len(val)} rows "
+            f"({model_name}); cv was {float(best['cv_score']):.4f}"
+        ),
+    )
+
+    updated = _write(
+        Experiment(**{**asdict(experiment), "val_score": score, "best_cv": float(best["cv_score"])})
+    )
+    write_index()
+    return updated
+
+
 def close_experiment(
     experiment_id: str | None = None,
     *,
@@ -405,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
     opener.add_argument("--seed", type=int, default=None)
     opener.add_argument("--val-frac", type=float, default=0.2)
 
+    sub.add_parser("evaluate", help="score the open experiment on its own val split, once")
+
     closer = sub.add_parser("close", help="finish the open experiment")
     closer.add_argument("--summary", default="")
     closer.add_argument("--abandon", action="store_true")
@@ -420,6 +587,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"(seed {experiment.seed})"
             )
             write_index()
+            return 0
+        if args.command == "evaluate":
+            experiment = evaluate()
+            print(
+                f"{experiment.experiment_id} validation: {experiment.val_score:.4f} "
+                f"on {len(experiment.val_ids)} held-back rows (cv was {experiment.best_cv:.4f})"
+            )
+            print("The final test is untouched — that one is read once for the whole programme.")
             return 0
         if args.command == "close":
             experiment = close_experiment(
