@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import locking, paths
 
 
 def read_receipts(path: Path | None = None) -> list[dict[str, Any]]:
@@ -101,9 +101,13 @@ def record_holdout_read(
         "score": None if score is None else round(float(score), 6),
         "reason": reason.replace("\n", " ").strip(),
     }
-    existing = read_receipts(receipt_path)
-    existing.append(receipt)
-    receipt_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    # Whole-array read-modify-write. Interleaved, the second write clobbers the
+    # first and a receipt disappears -- and a lost receipt is how a second
+    # holdout read passes itself off as the first.
+    with locking.locked(receipt_path):
+        existing = read_receipts(receipt_path)
+        existing.append(receipt)
+        receipt_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
     return receipt
 
 

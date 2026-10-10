@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths, run_log
+from . import locking, paths, run_log
 
 #: Column order of the ledger. Append new columns at the end only — older rows
 #: must stay readable.
@@ -258,11 +258,15 @@ def append_run(
         "notes": notes.replace("\n", " ").strip(),
         "pass_id": pass_id or run_log.current_pass_id(),
     }
-    previous = _data_lines(log_path)
-    row["prev_sha"] = _line_sha(previous[-1]) if previous else "genesis"
-
-    with log_path.open("a", newline="", encoding="utf-8") as handle:
-        csv.DictWriter(handle, fieldnames=COLUMNS).writerow(row)
+    # Read-hash-append is one critical section. Interleaved, two processes
+    # compute the same prev_sha and the chain forks -- which verify_chain cannot
+    # distinguish from a deleted row, so the audit would cry tampering about a
+    # ledger nobody touched.
+    with locking.locked(log_path):
+        previous = _data_lines(log_path)
+        row["prev_sha"] = _line_sha(previous[-1]) if previous else "genesis"
+        with log_path.open("a", newline="", encoding="utf-8") as handle:
+            csv.DictWriter(handle, fieldnames=COLUMNS).writerow(row)
     return resolved_run_id
 
 

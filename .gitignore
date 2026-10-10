@@ -88,3 +88,6 @@ ipython_config.py
 
 # ---- Claude Code local overrides ----
 .claude/settings.local.json
+
+# Advisory file locks guarding the append-only artifacts (see locking.py)
+*.lock
