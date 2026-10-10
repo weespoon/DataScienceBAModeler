@@ -69,7 +69,7 @@ surface.
 
 ```bash
 make introspect            # what we tune vs what we could
-make introspect --show-untuned
+make introspect UNTUNED=1  # ...and what is left at defaults
 make backlog               # what is already queued
 make leakage               # structural guards
 ```

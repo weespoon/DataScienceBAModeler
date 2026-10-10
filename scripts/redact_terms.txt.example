@@ -1,0 +1,12 @@
+# Private terms removed from transcripts before they are committed.
+#
+# Copy to redact_terms.txt (gitignored) and fill in. The real file is NOT
+# committed: a published list of the things being hidden would publish them.
+#
+# One term per line, case-insensitive, matched as a literal substring.
+# Include account names, employer names, project codenames, and anything else
+# that is private but has no distinctive shape for the pattern matcher to find.
+
+# employer-name
+# work-github-username
+# internal-project-codename

@@ -142,7 +142,22 @@ def summarize(run_id: str | None = None) -> Path:
     view is derived, never a separate copy: two records of the same events can
     disagree, and then neither can be trusted.
     """
-    from . import results_log, run_log
+    from . import experiments, results_log, run_log
+
+    # One pass just finished, so charge it. summarize() is the only thing that
+    # runs exactly once per `make loop`, which makes it the honest counter —
+    # and a cap nobody counts is a number in a file pretending to be a limit.
+    try:
+        experiments.record_spend("loop_passes", 1)
+        over = experiments.over_budget()
+        if over:
+            run_log.record(
+                "decision",
+                step="experiment",
+                detail=f"budget reached: {over} — stop, or ask the human to raise the cap",
+            )
+    except (OSError, ValueError):
+        pass  # a pass with no experiment open still deserves its summary
 
     # Minting here would create an empty directory and summarise nothing. With
     # no id and no pass in flight, the useful answer is the most recent pass.
@@ -216,7 +231,8 @@ def summarize(run_id: str | None = None) -> Path:
         "into *one read per run*.",
         "",
         f"- `make log` — the full ledger ({len(frame)} rows)",
-        f"- `make journal --pass-id {resolved}` — this pass's journal",
+        f"- `make journal PASS={resolved}` — this pass's journal "
+        "(options to make are variables, not flags)",
         "- `make audit` — whether the three rules held",
         "",
     ]

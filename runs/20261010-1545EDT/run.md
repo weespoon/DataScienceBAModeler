@@ -28,6 +28,7 @@ Started 2026-10-10T15:46:14-04:00 (2026-10-10T19:46:14+00:00).
 - **decision** (experiment) — exp-004 tests one lever: HGB regularisation (min_samples_leaf, l2_regularization, max_depth) from the backlog. Code change is uncommitted, so ledger rows carry -dirty.
 - **decision** (evaluate) — exp-004-hgb-regularisation validation: 0.8671 on 143 rows (random_forest); cv was 0.8190
 - **decision** (experiment) — closed exp-004-hgb-regularisation: best_cv=0.867133, val=0.8671328671328671
+- **decision** (pass) — stopped: experiment exp-004 complete (open/tune/ensemble/evaluate/close). Code change uncommitted; awaiting human on commit.
 
 ## Artifacts
 
@@ -45,5 +46,5 @@ a sharper reason: per-run receipts would turn *one read per frozen dataset*
 into *one read per run*.
 
 - `make log` — the full ledger (68 rows)
-- `make journal --pass-id 20261010-1545EDT` — this pass's journal
+- `make journal PASS=20261010-1545EDT` — this pass's journal (options to make are variables, not flags)
 - `make audit` — whether the three rules held

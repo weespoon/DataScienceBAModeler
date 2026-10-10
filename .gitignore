@@ -99,3 +99,6 @@ ipython_config.py
 # byte-identical PNGs, and reports/ already holds the latest copy of each.
 runs/**/*.png
 runs/**/submission.csv
+
+# Redaction term list: naming what is hidden would publish it
+scripts/redact_terms.txt

@@ -155,11 +155,36 @@ def test_caps_are_recorded_on_the_experiment(sandbox: Path, frozen_dir: Path) ->
     assert exp.caps == {"papers": 3}
 
 
-def test_default_caps_keep_web_fetching_off(sandbox: Path, frozen_dir: Path) -> None:
-    # v1 reads the installed package and the Kaggle API; general web is not on.
+def test_enforced_caps_are_only_the_ones_that_are_counted(sandbox: Path, frozen_dir: Path) -> None:
+    # A cap nobody counts is a number in a file pretending to be a limit. The
+    # first version of `caps` listed three nobody incremented, and a cold-start
+    # session correctly ignored the whole block.
     exp = experiments.open_experiment("first", frozen_dir=frozen_dir)
-    assert exp.caps["web_fetches"] == 0
-    assert exp.caps["kaggle_notebooks"] == 20
+    assert set(exp.caps) == {"wall_clock_s", "loop_passes"}
+    assert exp.caps_unenforced["web_fetches"] == 0  # v1: no general web
+    assert exp.caps_unenforced["kaggle_notebooks"] == 20
+
+
+def test_spend_is_counted_and_binds(sandbox: Path, frozen_dir: Path) -> None:
+    exp = experiments.open_experiment("counting", frozen_dir=frozen_dir)
+    assert experiments.over_budget() == {}
+    for _ in range(exp.caps["loop_passes"]):
+        experiments.record_spend("loop_passes", 1)
+    over = experiments.over_budget()
+    assert "loop_passes" in over
+    assert over["loop_passes"] == (3.0, 3.0)
+
+
+def test_unenforced_caps_never_report_as_over_budget(sandbox: Path, frozen_dir: Path) -> None:
+    # Reporting a resource nobody counts would be theatre.
+    experiments.open_experiment("first", frozen_dir=frozen_dir)
+    experiments.record_spend("kaggle_notebooks", 999)
+    assert "kaggle_notebooks" not in experiments.over_budget()
+
+
+def test_recording_spend_with_no_experiment_open_is_harmless(sandbox: Path) -> None:
+    assert experiments.record_spend("loop_passes", 1) is None
+    assert experiments.over_budget() == {}
 
 
 def test_loading_a_missing_experiment_raises(sandbox: Path) -> None:

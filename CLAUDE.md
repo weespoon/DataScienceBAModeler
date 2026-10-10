@@ -31,9 +31,9 @@ with its inputs, outputs and done criteria — read that skill before running a 
 
 `make <step>` runs any single step. **`make bootstrap`** runs steps 2–4 once —
 `freeze` refuses to run twice, so it can never sit in a loop. **`make loop`**
-runs steps 5–7 and is the repeatable part. (There is no `make all`; it used to
-exist and was removed precisely because it put `freeze` inside something meant
-to be re-run.)
+runs steps 5–7 and is the repeatable part. (There is no **make all** target any
+more; it existed once and was removed precisely because it put `freeze` inside
+something meant to be re-run.)
 
 Don't skip ahead — step 6 is meaningless before step 4, because a score with no
 frozen fingerprint cannot be compared to anything.
@@ -186,8 +186,13 @@ and you can no longer compare passes, while the hash chain stops noticing a
 deleted run. **Artifacts are per-pass; evidence is global.**
 
 A run id (`20261010-1446EDT`) is also the `pass_id` on every ledger row and
-journal entry that pass wrote, so `ls runs/<id>/` and
-`make journal --pass-id <id>` name the same thing.
+journal entry that pass wrote, so `ls runs/<id>/` and `make journal PASS=<id>`
+name the same thing.
+
+Options to `make` are **variables, not flags**: make consumes a leading `--flag`
+itself and the target never sees it. `make journal LEVEL=decision`, not
+`make journal` followed by a dash-dash option. A test enforces this across every
+document, because the mistake has been made twice.
 
 ## Orchestration
 

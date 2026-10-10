@@ -104,8 +104,12 @@ status: setup ## Which pipeline steps have completed, derived from artifacts on 
 next: setup ## Just the next incomplete step -- what the `run` skill loops on
 	@$(PYTHON) -m titanic_agent.status --next
 
-journal: setup ## Show the agent run journal (what the agent did, not what models scored)
-	@$(PYTHON) -m titanic_agent.run_log --tail 20
+# Make consumes a leading --flag itself, so options are Make VARIABLES.
+# LEVEL=decision shows only what needed a person; PASS=<id> scopes to one pass.
+JOURNAL_ARGS ?= --tail 20
+journal: setup ## Agent journal. Options: LEVEL=decision PASS=<run id> ALL=1
+	@$(PYTHON) -m titanic_agent.run_log $(JOURNAL_ARGS) \
+		$(if $(LEVEL),--level $(LEVEL)) $(if $(PASS),--pass-id $(PASS)) $(if $(ALL),--all)
 
 receipts: setup ## Show the holdout read receipts
 	@$(PYTHON) -m titanic_agent.receipts
@@ -113,8 +117,8 @@ receipts: setup ## Show the holdout read receipts
 audit: setup ## Did the three rules hold? Reads manifest, ledger chain and receipts
 	@$(PYTHON) -m titanic_agent.audit
 
-introspect: setup ## Are our search spaces valid against the INSTALLED sklearn?
-	@$(PYTHON) -m titanic_agent.introspect
+introspect: setup ## Search spaces vs the INSTALLED sklearn. Options: UNTUNED=1
+	@$(PYTHON) -m titanic_agent.introspect $(if $(UNTUNED),--show-untuned)
 
 leakage: setup ## Rule 4: structural guards against looking up the answers
 	@$(PYTHON) -m titanic_agent.leakage

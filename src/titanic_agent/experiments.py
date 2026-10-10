@@ -50,15 +50,25 @@ EXPERIMENT_ID_ENV = "TITANIC_EXPERIMENT_ID"
 #: Lifecycle. ``open`` accepts work; ``closed`` is final and keeps its number.
 STATUSES: tuple[str, ...] = ("open", "closed", "abandoned")
 
-#: Default budget. Caps exist so an autonomous program has an edge it cannot
-#: wander past; the token cap is deliberately absent until we have measured one
-#: research pass, because a number guessed now is a number we would change.
+#: Caps that are actually counted and actually bind. Nothing else belongs here.
+#:
+#: The first version listed kaggle_notebooks, papers and web_fetches too, and
+#: nothing incremented any of them. A cold-start session duly ignored the whole
+#: block, which was the correct response: a cap nobody counts is a number in a
+#: file pretending to be a constraint. They move to UNENFORCED below until the
+#: research step exists to count them.
 DEFAULT_CAPS: dict[str, Any] = {
+    "wall_clock_s": 1800,
+    "loop_passes": 3,
+}
+
+#: Budgets agreed in principle and not yet countable. Recorded separately and
+#: named for what they are, so reading experiment.json never leaves the
+#: impression that something is being enforced when it is not.
+UNENFORCED_CAPS: dict[str, Any] = {
     "kaggle_notebooks": 20,
     "papers": 10,
     "web_fetches": 0,  # v1 reads the installed package and the Kaggle API only
-    "wall_clock_s": 1800,
-    "loop_passes": 3,
 }
 
 
@@ -78,6 +88,8 @@ class Experiment:
     train_ids: list[int] = field(default_factory=list)
     val_ids: list[int] = field(default_factory=list)
     caps: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CAPS))
+    #: Budgets agreed but not yet counted. Separate from `caps` on purpose.
+    caps_unenforced: dict[str, Any] = field(default_factory=lambda: dict(UNENFORCED_CAPS))
     spend: dict[str, Any] = field(default_factory=dict)
     best_cv: float | None = None
     val_score: float | None = None
@@ -264,6 +276,42 @@ def load_frames(experiment: Experiment, *, frozen_dir: Path = paths.FROZEN_DIR):
     working = tune.add_derived(pd.read_csv(Path(frozen_dir) / "train.csv"))
     indexed = working.set_index("PassengerId", drop=False)
     return indexed.loc[experiment.train_ids], indexed.loc[experiment.val_ids]
+
+
+def record_spend(
+    resource: str, amount: float = 1, *, experiment_id: str | None = None
+) -> Experiment | None:
+    """Add to the open experiment's spend. Returns None when none is open.
+
+    Counting is the whole point: an uncounted cap is decoration. Every resource
+    in :data:`DEFAULT_CAPS` must have something calling this, or it belongs in
+    :data:`UNENFORCED_CAPS` instead.
+    """
+    target = experiment_id or (current_experiment().experiment_id if current_experiment() else None)
+    if target is None:
+        return None
+    experiment = load_experiment(target)
+    spend = dict(experiment.spend)
+    spend[resource] = spend.get(resource, 0) + amount
+    return _write(Experiment(**{**asdict(experiment), "spend": spend}))
+
+
+def over_budget(experiment_id: str | None = None) -> dict[str, tuple[float, float]]:
+    """Resources whose spend has reached or passed its cap.
+
+    Returns ``{resource: (spent, cap)}``. Empty means there is budget left.
+    Only :data:`DEFAULT_CAPS` are checked — the unenforced ones have no counter
+    and reporting them would be theatre.
+    """
+    target = experiment_id or (current_experiment().experiment_id if current_experiment() else None)
+    if target is None:
+        return {}
+    experiment = load_experiment(target)
+    return {
+        resource: (float(experiment.spend.get(resource, 0)), float(cap))
+        for resource, cap in experiment.caps.items()
+        if float(experiment.spend.get(resource, 0)) >= float(cap)
+    }
 
 
 def record_val_read(

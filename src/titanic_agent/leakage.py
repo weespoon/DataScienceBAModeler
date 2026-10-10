@@ -167,13 +167,35 @@ def check_external_reads(package_dir: Path | None = None) -> LeakageCheck:
     )
 
 
+#: Which kind of number a ledger row's ``cv_score`` column actually holds. The
+#: column is shared, so the *step* is what distinguishes them — and conflating
+#: the two is how this check spent a while reporting a 143-row validation score
+#: as "best cv", which the cold-start session caught.
+METRIC_BY_STEP: dict[str, str] = {
+    "tune": "cv",
+    "ensemble": "cv",
+    "evaluate": "val",
+}
+
+
+def metric_for(step: str) -> str:
+    """What kind of score a row of this step carries."""
+    return METRIC_BY_STEP.get(str(step), "score")
+
+
 def check_plausibility(*, log_path: Path | None = None) -> LeakageCheck:
     """Flag scores too high to be honest on this dataset.
 
     Not a proof of cheating, and deliberately set far above the realistic
     ceiling so a genuinely strong model never trips it. But on 891 labelled
-    rows, a cross-validated 0.95 is not a modelling achievement — it means the
-    answers got in somehow, and that deserves a human rather than a shrug.
+    rows, a 0.95 is not a modelling achievement — it means the answers got in
+    somehow, and that deserves a human rather than a shrug.
+
+    Cross-validated and validation scores are reported **separately**. They
+    share the ``cv_score`` column but are not the same measurement: a CV score
+    averages folds over hundreds of rows, a validation score is one draw over
+    143. Calling the second one "cv" is a small lie in an honesty check, which
+    is the worst place to keep one.
     """
     from . import results_log
 
@@ -186,12 +208,17 @@ def check_plausibility(*, log_path: Path | None = None) -> LeakageCheck:
         return LeakageCheck("score plausibility", True, "no scored runs yet")
 
     suspicious = scored[scored["cv_score"].astype(float) > IMPLAUSIBLE_ACCURACY]
-    best = float(scored["cv_score"].astype(float).max())
+
+    bests: list[str] = []
+    for metric in ("cv", "val"):
+        rows = scored[scored["step"].map(metric_for) == metric]
+        if len(rows):
+            bests.append(f"best {metric} {float(rows['cv_score'].astype(float).max()):.4f}")
 
     return LeakageCheck(
         "score plausibility",
         suspicious.empty,
-        f"best cv {best:.4f}, below the {IMPLAUSIBLE_ACCURACY:.2f} implausibility line"
+        f"{', '.join(bests)} — below the {IMPLAUSIBLE_ACCURACY:.2f} implausibility line"
         if suspicious.empty
         else (
             f"{len(suspicious)} run(s) scored above {IMPLAUSIBLE_ACCURACY:.2f} on a dataset "

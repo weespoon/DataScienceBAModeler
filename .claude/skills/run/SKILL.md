@@ -27,7 +27,11 @@ is a finding, not an obstacle. Report the mismatch and wait.
 Repeat until a stop condition fires:
 
 1. `make next` — it names the next incomplete step, or says complete.
-   (Not `make status --next`: make would read the flag as its own.)
+
+   Options to make are **variables, not flags**: a leading dash-dash option is
+   consumed by make itself and the target never sees it. That is why `next` is
+   its own target, and why the journal takes `LEVEL=decision` rather than an
+   option. A test checks every document for this.
 2. Read that step's skill: `.claude/skills/<step>/SKILL.md`. Read it *before*
    running the step, every time. The skill is where the done criteria live, and
    they are what you will check against in (4).

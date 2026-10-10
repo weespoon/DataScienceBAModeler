@@ -285,15 +285,23 @@ def explore(
     import matplotlib
 
     matplotlib.use("Agg")  # headless; must precede the pyplot import
-    import pandas as pd
 
-    from . import freeze, runs
+    from . import freeze, runs, tune
 
     freeze.require_frozen(frozen_dir)
     runs.write_metadata()
 
-    # Only train.csv. Never holdout.csv -- not even to count its rows.
-    train = pd.read_csv(Path(frozen_dir) / "train.csv")
+    # The rows this step may look at. Never holdout.csv -- that is the final
+    # test -- and, when an experiment is open, never that experiment's
+    # validation rows either.
+    #
+    # That second half was missing until the cold-start session caught it: tune
+    # had been rewired onto the experiment's 569 rows and explore had not, so it
+    # read all 712 and charted them. Nothing in the code was wrong; the charts
+    # simply put the experiment's own validation rows in front of whoever read
+    # the report, which is a leak through the eyes rather than through the data.
+    # Shares tune.load_training_frame so the two can never drift apart again.
+    train = tune.load_training_frame(frozen_dir)
     # Charts and the report land in this pass's run directory; reports/ keeps a
     # copy as the latest view so existing paths in the skills keep resolving.
     # Without this, every loop overwrote the previous pass's seven charts.
@@ -303,8 +311,7 @@ def explore(
     reports_dir = Path(reports_dir)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    family_size = train["SibSp"] + train["Parch"] + 1
-    frame = train.assign(FamilySize=family_size)
+    frame = train  # tune.load_training_frame already applied add_derived
 
     charts: list[tuple[str, Path]] = []
     tables: dict[str, dict[str, float]] = {}
