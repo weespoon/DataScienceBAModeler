@@ -20,7 +20,7 @@ TOP_K ?= 4
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune ensemble \
-	test lint log status next journal receipts audit runs summary bootstrap loop clean distclean
+	test lint log status next journal receipts audit introspect runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -112,6 +112,9 @@ receipts: setup ## Show the holdout read receipts
 
 audit: setup ## Did the three rules hold? Reads manifest, ledger chain and receipts
 	@$(PYTHON) -m titanic_agent.audit
+
+introspect: setup ## Are our search spaces valid against the INSTALLED sklearn?
+	@$(PYTHON) -m titanic_agent.introspect
 
 clean: ## Remove caches and generated reports (never touches data/)
 	rm -rf .pytest_cache .ruff_cache
