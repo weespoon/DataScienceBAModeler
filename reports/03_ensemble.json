@@ -1,0 +1,15 @@
+{
+  "run_id": "20261010T174349-44c07a",
+  "method": "soft_vote",
+  "members": [
+    "random_forest",
+    "gradient_boosting",
+    "logistic",
+    "svc"
+  ],
+  "cv_score": 0.8272727272727274,
+  "cv_std": 0.02991449290179217,
+  "best_single_cv": 0.828661,
+  "holdout_score": null,
+  "holdout_read": false
+}

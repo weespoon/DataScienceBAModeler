@@ -46,6 +46,12 @@ COLUMNS: tuple[str, ...] = (
     "seed",
     "frozen_sha256",
     "git_sha",
+    #: The attestation. Rule 2 cannot be fully prevented or reliably detected --
+    #: a stray read of holdout.csv in a step with no business reading it leaves
+    #: no trace (atime is unreliable on APFS). So every run signs a claim
+    #: instead, which turns a silent omission into an attributable false
+    #: statement. Appended at the end so older rows stay readable.
+    "holdout_read",
     "notes",
 )
 
@@ -124,6 +130,7 @@ def append_run(
     cv_std: float | None = None,
     cv_folds: int | None = None,
     seed: int = paths.SEED,
+    holdout_read: bool = False,
     notes: str = "",
     run_id: str | None = None,
     path: Path | None = None,
@@ -132,6 +139,11 @@ def append_run(
 
     ``params`` is serialised as a compact JSON string so the column stays a
     single CSV field and round-trips through :func:`read_log`.
+
+    ``holdout_read`` is an attestation, not a measurement: nothing verifies it.
+    Sign it honestly, including when the honest answer is inconvenient. A wrong
+    score you reported is recoverable; a false attestation makes every other row
+    in the file untrustworthy.
     """
     log_path = ensure_log(path)
     resolved_run_id = run_id or f"{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
@@ -147,6 +159,7 @@ def append_run(
         "seed": seed,
         "frozen_sha256": _frozen_sha(),
         "git_sha": _git_sha(),
+        "holdout_read": bool(holdout_read),
         "notes": notes.replace("\n", " ").strip(),
     }
     with log_path.open("a", newline="", encoding="utf-8") as handle:

@@ -211,3 +211,40 @@ def raw_dir(tmp_path: Path) -> Path:
 def log_path(tmp_path: Path) -> Path:
     """Path to a throwaway experiment ledger (not yet created)."""
     return tmp_path / "experiments" / "results.csv"
+
+
+@pytest.fixture
+def frozen_dir(raw_dir: Path, tmp_path: Path) -> Path:
+    """A sealed dataset in tmp_path, built from the miniature fixture.
+
+    Every test that touches steps 4-7 goes through this. The repo's own
+    ``data/frozen`` is never read or written by a test run.
+    """
+    from titanic_agent import freeze, split
+
+    target = tmp_path / "frozen"
+    split.split(raw_dir / "train.csv", plan_path=target / "split_plan.json")
+    freeze.freeze(raw_dir=raw_dir, frozen_dir=target, plan_path=target / "split_plan.json")
+    return target
+
+
+@pytest.fixture
+def writable_frozen_dir(raw_dir: Path, tmp_path: Path) -> Path:
+    """Same, but mode 0644 so a test can tamper with the files."""
+    from titanic_agent import freeze, split
+
+    target = tmp_path / "frozen"
+    split.split(raw_dir / "train.csv", plan_path=target / "split_plan.json")
+    freeze.freeze(
+        raw_dir=raw_dir,
+        frozen_dir=target,
+        plan_path=target / "split_plan.json",
+        read_only=False,
+    )
+    return target
+
+
+@pytest.fixture
+def journal_path(tmp_path: Path) -> Path:
+    """Path to a throwaway run journal (not yet created)."""
+    return tmp_path / "experiments" / "run_log.jsonl"

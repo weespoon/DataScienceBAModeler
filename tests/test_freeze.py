@@ -27,30 +27,6 @@ from _helpers import raises_real_runtime_error
 
 from titanic_agent import freeze, paths, split
 
-
-@pytest.fixture
-def frozen_dir(raw_dir: Path, tmp_path: Path) -> Path:
-    """A sealed dataset in tmp_path, built from the miniature fixture."""
-    target = tmp_path / "frozen"
-    split.split(raw_dir / "train.csv", plan_path=target / "split_plan.json")
-    freeze.freeze(raw_dir=raw_dir, frozen_dir=target, plan_path=target / "split_plan.json")
-    return target
-
-
-@pytest.fixture
-def writable_frozen_dir(raw_dir: Path, tmp_path: Path) -> Path:
-    """Same, but mode 0644 so a test can tamper with the files."""
-    target = tmp_path / "frozen"
-    split.split(raw_dir / "train.csv", plan_path=target / "split_plan.json")
-    freeze.freeze(
-        raw_dir=raw_dir,
-        frozen_dir=target,
-        plan_path=target / "split_plan.json",
-        read_only=False,
-    )
-    return target
-
-
 # --------------------------------------------------------------------------- #
 # contract
 # --------------------------------------------------------------------------- #

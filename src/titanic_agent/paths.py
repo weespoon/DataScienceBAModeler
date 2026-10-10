@@ -40,6 +40,10 @@ RESULTS_LOG: Path = EXPERIMENTS_DIR / "results.csv"
 #: own access. See :mod:`titanic_agent.receipts`.
 HOLDOUT_READS: Path = EXPERIMENTS_DIR / "holdout_reads.json"
 
+#: The agent's own journal, distinct from the experiment ledger: ``results.csv``
+#: records models, this records conduct. See :mod:`titanic_agent.run_log`.
+RUN_LOG: Path = EXPERIMENTS_DIR / "run_log.jsonl"
+
 #: Default random seed. Change it only with a recorded reason — the split that
 #: produced the frozen holdout is reproducible from this value plus MANIFEST.json.
 SEED: int = 20251010

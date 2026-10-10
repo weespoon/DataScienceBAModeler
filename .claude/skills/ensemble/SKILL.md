@@ -50,8 +50,12 @@ make ensemble METHOD=stack TOP_K=5
 
 ## Notes
 
-- `soft_vote` needs `predict_proba` from every member; `svc` needs
-  `probability=True`, which is slow — prefer `hard_vote` if it is a member.
+- `soft_vote` needs `predict_proba` from every member. `svc` has none of its
+  own: it is wrapped in `CalibratedClassifierCV(SVC(), ensemble=False)`, because
+  `SVC(probability=True)` is deprecated in scikit-learn 1.9 and removed in 1.11.
+  The wrapper costs a nested cross-validation, which makes `svc` the slowest of
+  the small models — `hard_vote` avoids that cost if you do not need
+  probabilities.
 - Drop candidates whose out-of-fold predictions correlate above
   `max_correlation` (0.95) with an already-selected member. Correlated members
   add cost without adding accuracy.
