@@ -1,0 +1,1 @@
+{"columns_added": ["experiment_id"], "ledger": "/Users/eric/code/DataScienceBAModeler/experiments/results.csv", "reason": "schema migration: 15 -> 16 columns", "rows_at_rebuild": 37, "timestamp_utc": "2026-10-10T19:14:30+00:00"}

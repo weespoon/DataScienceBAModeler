@@ -17,7 +17,7 @@ def test_unredirected_paths_are_anchored_under_root() -> None:
     # paths.WRITABLE_ARTIFACTS is deliberately pointed at tmp_path for the
     # duration of a test, so asserting it sits under ROOT would be asserting
     # that the isolation is broken.
-    for path in (paths.RAW_DIR, paths.FROZEN_DIR, paths.EXPERIMENTS_DIR):
+    for path in (paths.RAW_DIR, paths.FROZEN_DIR, paths.DATA_DIR):
         assert path.is_relative_to(paths.ROOT)
 
 

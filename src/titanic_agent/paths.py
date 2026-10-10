@@ -48,6 +48,19 @@ HOLDOUT_READS: Path = EXPERIMENTS_DIR / "holdout_reads.json"
 #: records models, this records conduct. See :mod:`titanic_agent.run_log`.
 RUN_LOG: Path = EXPERIMENTS_DIR / "run_log.jsonl"
 
+#: Append-only claims-with-evidence. What was *learned*, as opposed to what was
+#: scored — the thing a later experiment inherits. See :mod:`titanic_agent.findings`.
+FINDINGS: Path = EXPERIMENTS_DIR / "findings.jsonl"
+
+#: Human index of every experiment, derived from their manifests.
+EXPERIMENTS_INDEX: Path = EXPERIMENTS_DIR / "EXPERIMENTS.md"
+
+#: Append-only record of every time the ledger's hash chain was rebuilt. A
+#: schema migration rewrites every line and so necessarily breaks the chain;
+#: rather than pretend otherwise, the rebuild is recorded and the audit reports
+#: it. See :func:`titanic_agent.results_log.verify_chain`.
+CHAIN_EPOCHS: Path = EXPERIMENTS_DIR / "chain_epochs.jsonl"
+
 #: Default random seed. Change it only with a recorded reason — the split that
 #: produced the frozen holdout is reproducible from this value plus MANIFEST.json.
 SEED: int = 20251010
@@ -62,9 +75,13 @@ SEED: int = 20251010
 #: created 53 stray run directories. A guard that has to be remembered is a
 #: guard that will be forgotten — enumerate once, iterate everywhere.
 WRITABLE_ARTIFACTS: tuple[str, ...] = (
+    "EXPERIMENTS_DIR",
     "RESULTS_LOG",
     "HOLDOUT_READS",
     "RUN_LOG",
+    "FINDINGS",
+    "EXPERIMENTS_INDEX",
+    "CHAIN_EPOCHS",
     "RUNS_DIR",
     "REPORTS_DIR",
 )

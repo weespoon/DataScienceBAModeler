@@ -20,7 +20,7 @@ TOP_K ?= 4
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune ensemble \
-	test lint log status next journal receipts audit introspect runs summary bootstrap loop clean distclean
+	test lint log status next journal receipts audit introspect experiments experiment-open experiment-close findings backlog runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -115,6 +115,21 @@ audit: setup ## Did the three rules hold? Reads manifest, ledger chain and recei
 
 introspect: setup ## Are our search spaces valid against the INSTALLED sklearn?
 	@$(PYTHON) -m titanic_agent.introspect
+
+experiments: setup ## List every experiment and its scores
+	@$(PYTHON) -m titanic_agent.experiments
+
+experiment-open: setup ## Start an experiment: make experiment-open NAME="wide search"
+	@$(PYTHON) -m titanic_agent.experiments open "$(NAME)"
+
+experiment-close: setup ## Close the open experiment: make experiment-close SUMMARY="..."
+	@$(PYTHON) -m titanic_agent.experiments close --summary "$(SUMMARY)"
+
+findings: setup ## What we have learned, and what is still untried
+	@$(PYTHON) -m titanic_agent.findings
+
+backlog: setup ## Only the untried ideas -- what the planner picks from
+	@$(PYTHON) -m titanic_agent.findings --backlog
 
 clean: ## Remove caches and generated reports (never touches data/)
 	rm -rf .pytest_cache .ruff_cache

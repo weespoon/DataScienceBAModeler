@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import subprocess
 import uuid
@@ -62,6 +63,14 @@ COLUMNS: tuple[str, ...] = (
     #: was an honour system until this column existed: nothing would have
     #: noticed a quietly removed result. See :func:`verify_chain`.
     "prev_sha",
+    #: Which experiment owns this row. Scores are comparable across experiments
+    #: only where `frozen_sha256` also matches — a different working set means a
+    #: different question was being asked.
+    #:
+    #: Appended here rather than beside `pass_id`, where it reads better, because
+    #: ensure_log() refuses a header that is not the old one plus new columns at
+    #: the end. That rule exists so old rows stay readable, and it caught this.
+    "experiment_id",
 )
 
 
@@ -134,6 +143,22 @@ def _line_sha(line: str) -> str:
     return hashlib.sha256(line.encode("utf-8")).hexdigest()
 
 
+def _current_experiment_id() -> str:
+    """The open experiment's id, or "" when none is open.
+
+    Imported lazily and failure-tolerantly: a row that cannot name its
+    experiment is still worth logging. Rule 3 says a run not in the ledger did
+    not happen, and that outranks tidy provenance.
+    """
+    try:
+        from . import experiments
+
+        current = experiments.current_experiment()
+    except Exception:
+        return ""
+    return current.experiment_id if current else ""
+
+
 def ensure_log(path: Path | None = None) -> Path:
     """Create the ledger, or migrate it when columns have been appended.
 
@@ -142,10 +167,17 @@ def ensure_log(path: Path | None = None) -> Path:
     mechanical form of the CLAUDE.md rule that new columns go at the end so old
     rows stay readable.
 
-    Note that a migration necessarily rewrites every line, which would break an
-    existing hash chain. That is safe only because :func:`verify_chain` starts
-    from the first row that actually carries a ``prev_sha``; rows written before
-    the chain existed are reported as unchained rather than as tampered.
+    A migration necessarily rewrites every line, which breaks the hash chain:
+    tamper-evidence requires recomputing from content, while schema stability
+    requires not recomputing, and those genuinely conflict. Rather than pretend
+    otherwise, the chain is rebuilt and the rebuild is **recorded** in
+    ``experiments/chain_epochs.jsonl``, which ``make audit`` reports.
+
+    What that costs, stated plainly: rows written before a rebuild can no longer
+    be verified against their original bytes. The chain proves nothing was
+    deleted or edited *since the last rebuild*. A rebuild is therefore an
+    auditable event with a reason attached, not a silent repair — the question
+    "why did the chain restart here?" is one the audit makes someone answer.
     """
     log_path = Path(path) if path is not None else paths.RESULTS_LOG
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +205,89 @@ def ensure_log(path: Path | None = None) -> Path:
         writer.writeheader()
         for row in rows:
             writer.writerow({column: row.get(column, "") for column in COLUMNS})
+
+    _rebuild_chain(log_path)
+    _record_chain_epoch(
+        reason=f"schema migration: {len(existing)} -> {len(COLUMNS)} columns",
+        added=[c for c in COLUMNS if c not in existing],
+        rows=len(rows),
+        log_path=log_path,
+    )
     return log_path
+
+
+def _render_row(row: dict[str, Any]) -> str:
+    """Render one row exactly as :func:`append_run` would write it, unterminated."""
+    buffer = io.StringIO()
+    csv.DictWriter(buffer, fieldnames=COLUMNS).writerow(
+        {column: row.get(column, "") for column in COLUMNS}
+    )
+    return buffer.getvalue().rstrip("\r\n")
+
+
+def _rebuild_chain(log_path: Path) -> None:
+    """Recompute every ``prev_sha`` so the rewritten file is self-consistent.
+
+    Done entirely in memory. The first attempt re-read the file after each row
+    to find the previous line, which raced its own buffering and produced a
+    chain that failed its own verification.
+    """
+    with log_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    rendered: list[str] = []
+    previous: str | None = None
+    for row in rows:
+        # Only rows that already carried a chain stay chained. Rows that predate
+        # it keep their blank prev_sha and remain unverifiable, which is the
+        # truth about them -- back-filling would claim a guarantee we never had.
+        if (row.get("prev_sha") or "").strip():
+            row["prev_sha"] = _line_sha(previous) if previous is not None else "genesis"
+        line = _render_row(row)
+        rendered.append(line)
+        previous = line
+
+    with log_path.open("w", newline="", encoding="utf-8") as handle:
+        handle.write(",".join(COLUMNS) + "\r\n")
+        for line in rendered:
+            handle.write(line + "\r\n")
+
+
+def _record_chain_epoch(*, reason: str, added: list[str], rows: int, log_path: Path) -> None:
+    """Append an auditable record that the chain was rebuilt, and why."""
+    entry = {
+        "timestamp_utc": _utc_now(),
+        "reason": reason,
+        "columns_added": added,
+        "rows_at_rebuild": rows,
+        "ledger": str(log_path),
+    }
+    try:
+        paths.CHAIN_EPOCHS.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            locking.locked(paths.CHAIN_EPOCHS),
+            paths.CHAIN_EPOCHS.open("a", encoding="utf-8") as handle,
+        ):
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    except OSError:
+        pass  # the migration itself matters more than its footnote
+
+
+def read_chain_epochs(path: Path | None = None) -> list[dict[str, Any]]:
+    """Every recorded chain rebuild, oldest first."""
+    target = Path(path) if path is not None else paths.CHAIN_EPOCHS
+    found: list[dict[str, Any]] = []
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError:
+        return found
+    for line in text.splitlines():
+        if line.strip():
+            try:
+                found.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return found
 
 
 def verify_chain(path: Path | None = None) -> dict[str, Any]:
@@ -228,6 +342,7 @@ def append_run(
     notes: str = "",
     run_id: str | None = None,
     pass_id: str | None = None,
+    experiment_id: str | None = None,
     path: Path | None = None,
 ) -> str:
     """Append exactly one row to the ledger and return its ``run_id``.
@@ -257,6 +372,7 @@ def append_run(
         "holdout_read": bool(holdout_read),
         "notes": notes.replace("\n", " ").strip(),
         "pass_id": pass_id or run_log.current_pass_id(),
+        "experiment_id": experiment_id if experiment_id is not None else _current_experiment_id(),
     }
     # Read-hash-append is one critical section. Interleaved, two processes
     # compute the same prev_sha and the chain forks -- which verify_chain cannot

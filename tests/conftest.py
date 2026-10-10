@@ -8,6 +8,7 @@ must not be able to disturb a frozen dataset or the experiment ledger.
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -277,3 +278,49 @@ def _never_touch_real_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     for attribute in paths.WRITABLE_ARTIFACTS:
         real = getattr(paths, attribute)
         monkeypatch.setattr(paths, attribute, sandbox / real.name)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _repo_artifacts_unchanged() -> Iterator[None]:
+    """Fail the session if any test wrote into the repo's artifact trees.
+
+    The per-path guard above redirects everything named in
+    ``paths.WRITABLE_ARTIFACTS``. It cannot catch a path nobody remembered to
+    add — and that has now happened twice: ``RUNS_DIR`` (53 stray run
+    directories) and ``EXPERIMENTS_DIR``. A list you must remember to update is
+    not a guard, it is a habit.
+
+    This one needs no list. It snapshots the real trees before the session and
+    compares afterwards, so a new artifact leaks loudly the first time rather
+    than quietly for an hour.
+    """
+    from titanic_agent import paths as real_paths
+
+    watched = (
+        real_paths.ROOT / "experiments",
+        real_paths.ROOT / "runs",
+        real_paths.ROOT / "reports",
+    )
+
+    def snapshot() -> dict[str, float]:
+        seen: dict[str, float] = {}
+        for root in watched:
+            if not root.exists():
+                continue
+            for item in root.rglob("*"):
+                if item.is_file():
+                    seen[str(item)] = item.stat().st_mtime
+        return seen
+
+    before = snapshot()
+    yield
+    after = snapshot()
+
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    changed = sorted(k for k in set(before) & set(after) if before[k] != after[k])
+    assert not (added or removed or changed), (
+        "the test suite wrote into the real repo:\n"
+        f"  added:   {added[:5]}\n  removed: {removed[:5]}\n  changed: {changed[:5]}\n"
+        "Add the path to paths.WRITABLE_ARTIFACTS so the autouse guard redirects it."
+    )

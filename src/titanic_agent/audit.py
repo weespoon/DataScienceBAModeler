@@ -106,6 +106,20 @@ def audit(
         )
     )
 
+    epochs = results_log.read_chain_epochs()
+    if epochs:
+        latest = epochs[-1]
+        checks.append(
+            Check(
+                "rule 3 · chain rebuilt",
+                True,
+                f"{len(epochs)} rebuild(s); most recent: {latest.get('reason', '?')}. "
+                "Rows written before it cannot be verified against their original "
+                "bytes — the chain proves nothing was removed *since* the rebuild",
+                informational=True,
+            )
+        )
+
     frame = results_log.read_log(log_path)
     if chain["unchained_rows"]:
         checks.append(
