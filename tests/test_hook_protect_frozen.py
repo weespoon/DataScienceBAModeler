@@ -153,6 +153,52 @@ def test_bash_heuristic_is_known_to_be_evadable() -> None:
     assert hook.decide(evasion, is_frozen=True) is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The commit that introduced this hook was itself denied, because its
+        # message quoted the command the rule forbids. The tempting fix was to
+        # reword the message; an over-broad constraint creates pressure to
+        # degrade the record, so the pattern got fixed instead.
+        "git commit -F - <<'EOF'\nthis message mentions chmod -R u+w data/frozen\nEOF",
+        'git commit -m "describe chmod on data/frozen in a message"',
+        "git commit --message='rm -rf data/frozen was denied, as intended'",
+        "git status",
+        "git log --oneline",
+        "git clean -fd",  # removes untracked files, but not ignored ones
+    ],
+)
+def test_prose_about_the_rule_is_not_an_attempt_to_break_it(command: str) -> None:
+    assert hook.decide(bash(command), is_frozen=True) is None
+
+
+def test_a_quoted_path_is_still_a_real_target() -> None:
+    # Stripping heredocs and -m arguments must not become "ignore all quotes":
+    # this one is a genuine attempt.
+    assert hook.decide(bash('rm -rf "data/frozen"'), is_frozen=True) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git clean -xfd",
+        "git clean -X",
+        "git clean --force -x",
+        "git stash --all",
+        "git stash -ua",
+    ],
+)
+def test_git_commands_that_delete_ignored_files_are_denied(command: str) -> None:
+    # Everything under data/frozen is gitignored. That is why no ordinary git
+    # command can touch it -- and exactly why these can, without ever naming
+    # the path. Found while fixing the false positive above.
+    assert hook.decide(bash(command), is_frozen=True) is not None
+
+
+def test_those_git_commands_are_fine_before_freezing(tmp_path) -> None:
+    assert hook.decide(bash("git clean -xfd"), is_frozen=False) is None
+
+
 def test_decide_is_pure_and_takes_no_env_override() -> None:
     import inspect
 

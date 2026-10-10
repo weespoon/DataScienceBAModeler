@@ -66,6 +66,56 @@ MUTATING = re.compile(
 #: How the frozen directory might be named in a shell command.
 MENTIONS_FROZEN = re.compile(r"data/frozen|data\\frozen")
 
+#: Heredoc introducer, e.g. ``<<'EOF'`` or ``<<-EOF``.
+HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?")
+
+#: Message arguments: text that *describes*, never a path that gets mutated.
+MESSAGE_ARG = re.compile(
+    r"""(?:-m|--message)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)""",
+    re.VERBOSE,
+)
+
+#: git commands that delete *ignored* files, and so can wipe data/frozen without
+#: ever naming it. Everything under data/frozen is gitignored, which is exactly
+#: why no ordinary git command can touch it — and why these two can.
+DANGEROUS_GIT = re.compile(
+    r"""(
+      \bgit\b[^|;&]*\bclean\b[^|;&]*-[a-zA-Z]*[xX]
+    | \bgit\b[^|;&]*\bstash\b[^|;&]*(--all|\s-\w*a)
+    )""",
+    re.VERBOSE,
+)
+
+
+def _strip_prose(command: str) -> str:
+    """Remove text that is a *message* rather than a command target.
+
+    Heredoc bodies and ``-m``/``--message`` arguments carry prose: a commit
+    message describing this very rule should not be read as an attempt to break
+    it. Learned the hard way — this hook denied the commit that introduced it,
+    and the tempting fix was to reword the message rather than the pattern.
+
+    Quoted strings in general are *not* stripped: ``rm -rf "data/frozen"`` is a
+    real attempt and must still be caught.
+    """
+    # Heredoc bodies: drop everything between the introducer's newline and the
+    # terminator line.
+    while (match := HEREDOC.search(command)) is not None:
+        delimiter = match.group(1)
+        body_start = command.find("\n", match.end())
+        if body_start == -1:
+            command = command[: match.start()]
+            break
+        remainder = command[body_start:]
+        terminator = re.search(rf"^{re.escape(delimiter)}\s*$", remainder, re.MULTILINE)
+        if terminator is None:
+            command = command[:body_start]
+            break
+        command = command[: match.start()] + remainder[terminator.end() :]
+
+    return MESSAGE_ARG.sub(" ", command)
+
+
 DENY_REASON = (
     "Rule 1 (CLAUDE.md): data/frozen/ is immutable once MANIFEST.json exists. "
     "This write was denied by the PreToolUse hook, not by a convention. "
@@ -139,9 +189,12 @@ def decide(payload: dict, *, is_frozen: bool, root: Path = ROOT) -> str | None:
         return None
 
     if tool == "Bash":
-        command = str(tool_input.get("command") or "")
+        raw = str(tool_input.get("command") or "")
+        command = _strip_prose(raw)
+        if DANGEROUS_GIT.search(command):
+            return f"Bash (deletes ignored files, which is all of data/frozen) -> {raw[:160]}"
         if MENTIONS_FROZEN.search(command) and MUTATING.search(command):
-            return f"Bash -> {command[:160]}"
+            return f"Bash -> {raw[:160]}"
         return None
 
     return None
