@@ -3,6 +3,10 @@
 A deliberately small, deliberately strict data science repo for the
 [Kaggle Titanic](https://www.kaggle.com/competitions/titanic) competition.
 
+> A personal learning project, written on my own time and my own equipment. It
+> is not connected to any employer's work, data or systems: everything here is
+> built around the public Kaggle Titanic dataset.
+
 **The goal is not the leaderboard.** It is to learn agentic AI by handing an
 autonomous agent — Claude Code — a complete, well-fenced workflow and letting it
 run the whole thing on its own: pull the data, audit it, split it, freeze it,
@@ -119,4 +123,4 @@ the network.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Eric J. Witherspoon.

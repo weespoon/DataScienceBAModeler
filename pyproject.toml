@@ -40,7 +40,7 @@ kaggle = ["kaggle>=1.6"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.urls]
-Repository = "https://github.com/eric-edvisorly/DataScienceBAModeler"
+Repository = "https://github.com/weespoon/DataScienceBAModeler"
 
 [project.scripts]
 titanic-pull = "titanic_agent.pull:main"
