@@ -1,0 +1,188 @@
+{
+  "n_rows": {
+    "train.csv": 891,
+    "test.csv": 418
+  },
+  "n_cols": {
+    "train.csv": 12,
+    "test.csv": 11
+  },
+  "missing_frac": {
+    "PassengerId": 0.0,
+    "Survived": 0.0,
+    "Pclass": 0.0,
+    "Name": 0.0,
+    "Sex": 0.0,
+    "Age": 0.1987,
+    "SibSp": 0.0,
+    "Parch": 0.0,
+    "Ticket": 0.0,
+    "Fare": 0.0,
+    "Cabin": 0.771,
+    "Embarked": 0.0022
+  },
+  "high_cardinality": [
+    "PassengerId",
+    "Name",
+    "Ticket",
+    "Cabin"
+  ],
+  "constant_columns": [],
+  "target_balance": {
+    "0": 0.6162,
+    "1": 0.3838
+  },
+  "leakage_suspects": [
+    "PassengerId",
+    "Name"
+  ],
+  "report_path": "/Users/eric/code/DataScienceBAModeler/reports/01_review.md",
+  "columns": [
+    {
+      "name": "PassengerId",
+      "dtype": "int64",
+      "is_numeric": true,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 891,
+      "unique_frac": 1.0,
+      "unique_frac_observed": 1.0,
+      "example": "1"
+    },
+    {
+      "name": "Survived",
+      "dtype": "int64",
+      "is_numeric": true,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 2,
+      "unique_frac": 0.0022,
+      "unique_frac_observed": 0.0022,
+      "example": "0"
+    },
+    {
+      "name": "Pclass",
+      "dtype": "int64",
+      "is_numeric": true,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 3,
+      "unique_frac": 0.0034,
+      "unique_frac_observed": 0.0034,
+      "example": "3"
+    },
+    {
+      "name": "Name",
+      "dtype": "str",
+      "is_numeric": false,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 891,
+      "unique_frac": 1.0,
+      "unique_frac_observed": 1.0,
+      "example": "Braund, Mr. Owen Harris"
+    },
+    {
+      "name": "Sex",
+      "dtype": "str",
+      "is_numeric": false,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 2,
+      "unique_frac": 0.0022,
+      "unique_frac_observed": 0.0022,
+      "example": "male"
+    },
+    {
+      "name": "Age",
+      "dtype": "float64",
+      "is_numeric": true,
+      "missing": 177,
+      "missing_frac": 0.1987,
+      "n_unique": 88,
+      "unique_frac": 0.0988,
+      "unique_frac_observed": 0.1232,
+      "example": "22.0"
+    },
+    {
+      "name": "SibSp",
+      "dtype": "int64",
+      "is_numeric": true,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 7,
+      "unique_frac": 0.0079,
+      "unique_frac_observed": 0.0079,
+      "example": "1"
+    },
+    {
+      "name": "Parch",
+      "dtype": "int64",
+      "is_numeric": true,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 7,
+      "unique_frac": 0.0079,
+      "unique_frac_observed": 0.0079,
+      "example": "0"
+    },
+    {
+      "name": "Ticket",
+      "dtype": "str",
+      "is_numeric": false,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 681,
+      "unique_frac": 0.7643,
+      "unique_frac_observed": 0.7643,
+      "example": "A/5 21171"
+    },
+    {
+      "name": "Fare",
+      "dtype": "float64",
+      "is_numeric": true,
+      "missing": 0,
+      "missing_frac": 0.0,
+      "n_unique": 248,
+      "unique_frac": 0.2783,
+      "unique_frac_observed": 0.2783,
+      "example": "7.25"
+    },
+    {
+      "name": "Cabin",
+      "dtype": "str",
+      "is_numeric": false,
+      "missing": 687,
+      "missing_frac": 0.771,
+      "n_unique": 147,
+      "unique_frac": 0.165,
+      "unique_frac_observed": 0.7206,
+      "example": "C85"
+    },
+    {
+      "name": "Embarked",
+      "dtype": "str",
+      "is_numeric": false,
+      "missing": 2,
+      "missing_frac": 0.0022,
+      "n_unique": 3,
+      "unique_frac": 0.0034,
+      "unique_frac_observed": 0.0034,
+      "example": "S"
+    }
+  ],
+  "needs_imputation": [
+    "Age",
+    "Cabin",
+    "Embarked"
+  ],
+  "needs_encoding": [
+    "Sex",
+    "Embarked"
+  ],
+  "duplicate_rows": 0,
+  "notes": [
+    "`PassengerId` has 891 distinct values in 891 rows: effectively a row identifier. Exclude it from features.",
+    "`Name` has 891 distinct values in 891 rows: effectively a row identifier. Exclude it from features."
+  ]
+}

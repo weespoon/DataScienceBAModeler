@@ -19,14 +19,37 @@ Done criteria
 Because ``freeze`` refuses to run twice, it must never sit inside a loop that
 reruns. ``make bootstrap`` covers steps 2-4 and is run once; ``make loop``
 covers the repeatable steps 5-7.
+
+Note that ``chmod 0444`` is a guard rail, not the enforcement: it does not stop
+the file's owner, who can simply ``chmod u+w``. The actual constraint is the
+``PreToolUse`` hook in ``.claude/hooks/protect_frozen.py``, which denies the
+agent any write here once ``MANIFEST.json`` exists.
 """
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import json
+import stat
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import paths
+
+#: Files the manifest covers. ``split_plan.json`` is included on purpose: the
+#: provenance of the partition is part of what is being sealed, so a later edit
+#: to the plan shows up as a checksum mismatch rather than passing unnoticed.
+MANIFEST_FILES: tuple[str, ...] = (
+    "train.csv",
+    "holdout.csv",
+    "test.csv",
+    "split_plan.json",
+)
+
+#: Read-only for everyone.
+READ_ONLY = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH  # 0o444
 
 
 @dataclass(frozen=True)
@@ -40,6 +63,121 @@ class Manifest:
     row_counts: dict[str, int] = field(default_factory=dict)
     dataset_sha256: str = ""
     manifest_path: Path | None = None
+
+
+def _sha256(path: Path) -> str:
+    """SHA-256 of a file, read in chunks."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _dataset_fingerprint(files: dict[str, str]) -> str:
+    """Combine per-file hashes into one order-independent fingerprint.
+
+    Hashes the sorted ``name:sha`` lines, so the order files happened to be
+    written in cannot change the result.
+    """
+    body = "\n".join(f"{name}:{sha}" for name, sha in sorted(files.items()))
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def is_frozen(frozen_dir: Path = paths.FROZEN_DIR) -> bool:
+    """True when ``frozen_dir`` holds a readable manifest. Never raises.
+
+    This is the single source of truth for "is the dataset sealed", read by
+    :mod:`titanic_agent.split`, by :func:`require_frozen`, and — deliberately —
+    by the ``PreToolUse`` hook, so the invariant lives in one place.
+    """
+    manifest_path = Path(frozen_dir) / paths.MANIFEST.name
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(isinstance(payload, dict) and payload.get("dataset_sha256"))
+
+
+def load_manifest(frozen_dir: Path = paths.FROZEN_DIR) -> Manifest:
+    """Read ``MANIFEST.json`` into a :class:`Manifest`.
+
+    Raises:
+        FileNotFoundError: The dataset is not frozen.
+        ValueError: The manifest is present but malformed.
+    """
+    manifest_path = Path(frozen_dir) / paths.MANIFEST.name
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"{manifest_path} is missing — the dataset is not frozen. Run `make freeze`."
+        ) from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{manifest_path} is not valid JSON: {exc}") from None
+
+    try:
+        return Manifest(
+            frozen_at_utc=str(payload["frozen_at_utc"]),
+            seed=int(payload["seed"]),
+            git_sha=str(payload.get("git_sha", "unknown")),
+            files={str(k): str(v) for k, v in payload["files"].items()},
+            row_counts={str(k): int(v) for k, v in payload.get("row_counts", {}).items()},
+            dataset_sha256=str(payload["dataset_sha256"]),
+            manifest_path=manifest_path,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"{manifest_path} has a missing or malformed field: {exc}") from None
+
+
+def verify(frozen_dir: Path = paths.FROZEN_DIR) -> bool:
+    """Re-hash the frozen files and compare against the manifest.
+
+    Every downstream step calls this first. A False here means the frozen data
+    drifted and all existing scores are suspect. Never raises — an unfrozen or
+    malformed directory is a False, so callers can branch on it.
+    """
+    frozen_dir = Path(frozen_dir)
+    try:
+        manifest = load_manifest(frozen_dir)
+    except (FileNotFoundError, ValueError):
+        return False
+
+    for name, expected in manifest.files.items():
+        path = frozen_dir / name
+        if not path.is_file():
+            return False
+        try:
+            if _sha256(path) != expected:
+                return False
+        except OSError:
+            return False
+
+    # The fingerprint must also agree with the per-file hashes, so editing the
+    # manifest's own `files` map cannot quietly re-bless tampered data.
+    return _dataset_fingerprint(manifest.files) == manifest.dataset_sha256
+
+
+def require_frozen(frozen_dir: Path = paths.FROZEN_DIR) -> Manifest:
+    """Guard used by explore/tune/ensemble: verify, or refuse to run.
+
+    Raises:
+        RuntimeError: The data is not frozen, or its checksums do not match.
+    """
+    frozen_dir = Path(frozen_dir)
+    if not is_frozen(frozen_dir):
+        raise RuntimeError(
+            f"{frozen_dir} is not frozen. Steps 5-7 read frozen data only — "
+            "run `make bootstrap` (review, split, freeze) first."
+        )
+    if not verify(frozen_dir):
+        raise RuntimeError(
+            f"the frozen dataset in {frozen_dir} does not match its manifest. "
+            "Every score computed against it is suspect. This is information, not "
+            "an obstacle: investigate and report the mismatch. Do not re-freeze — "
+            "that is a human decision."
+        )
+    return load_manifest(frozen_dir)
 
 
 def freeze(
@@ -63,51 +201,114 @@ def freeze(
 
     Raises:
         RuntimeError: ``frozen_dir`` is already frozen. There is deliberately
-            no ``force`` flag — unfreezing is a manual, deliberate act
-            (``chmod -R u+w data/frozen && rm -rf data/frozen/*``) and it
-            invalidates every score already in the results log.
+            no ``force`` flag — unfreezing is a manual, deliberate act and it
+            invalidates every score already in the results log. See
+            ``docs/UNFREEZING.md``, which is addressed to a human.
+        FileNotFoundError: The raw data or the split plan is missing.
+        ValueError: The plan's ids do not match the raw training data.
     """
-    # TODO(freeze): implement.
-    #   1. If is_frozen(frozen_dir): raise RuntimeError -- no silent overwrite.
-    #   2. Load the split plan; slice raw train into train.csv / holdout.csv
-    #      by PassengerId; copy test.csv through unchanged.
-    #   3. sha256 each written file; dataset_sha256 = sha256 of the sorted
-    #      "name:sha" lines, so it is order-independent.
-    #   4. Write MANIFEST.json, then chmod 0444 every file if read_only.
-    #   5. Assert verify(frozen_dir) before returning.
-    raise NotImplementedError("freeze() is not implemented yet")
+    import pandas as pd
 
+    from . import results_log
+    from . import split as split_module
 
-def verify(frozen_dir: Path = paths.FROZEN_DIR) -> bool:
-    """Re-hash the frozen files and compare against the manifest.
+    frozen_dir = Path(frozen_dir)
+    if is_frozen(frozen_dir):
+        manifest = load_manifest(frozen_dir)
+        raise RuntimeError(
+            f"{frozen_dir} was already frozen at {manifest.frozen_at_utc} "
+            f"(sha={manifest.dataset_sha256[:12]}). Re-freezing would invalidate every "
+            "score in experiments/results.csv. There is no force flag. Use "
+            "`make verify` to re-check the existing freeze."
+        )
 
-    Every downstream step calls this first. A False here means the frozen data
-    drifted and all existing scores are suspect.
-    """
-    # TODO(freeze): implement manifest-vs-disk checksum comparison.
-    raise NotImplementedError("verify() is not implemented yet")
+    raw_dir = Path(raw_dir)
+    raw_train, raw_test = raw_dir / "train.csv", raw_dir / "test.csv"
+    for path in (raw_train, raw_test):
+        if not path.is_file():
+            raise FileNotFoundError(f"{path} is missing — run `make pull` first")
 
+    plan = split_module.load_plan(plan_path)
 
-def is_frozen(frozen_dir: Path = paths.FROZEN_DIR) -> bool:
-    """True when ``frozen_dir`` holds a readable manifest. Never raises."""
-    # TODO(freeze): return (frozen_dir / "MANIFEST.json").is_file() and parses.
-    raise NotImplementedError("is_frozen() is not implemented yet")
+    train_raw = pd.read_csv(raw_train)
+    indexed = train_raw.set_index(plan.id_column, drop=False)
+    all_ids = {int(i) for i in train_raw[plan.id_column]}
+    planned = set(plan.train_ids) | set(plan.holdout_ids)
+    if planned != all_ids:
+        missing, extra = all_ids - planned, planned - all_ids
+        raise ValueError(
+            f"the split plan does not cover {raw_train}: "
+            f"{len(missing)} unplanned id(s), {len(extra)} unknown id(s). "
+            "Redraw the split before freezing."
+        )
 
+    frozen_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    row_counts: dict[str, int] = {}
 
-def load_manifest(frozen_dir: Path = paths.FROZEN_DIR) -> Manifest:
-    """Read ``MANIFEST.json`` into a :class:`Manifest`."""
-    # TODO(freeze): implement JSON -> Manifest.
-    raise NotImplementedError("load_manifest() is not implemented yet")
+    for name, ids in (("train.csv", plan.train_ids), ("holdout.csv", plan.holdout_ids)):
+        part = indexed.loc[ids].reset_index(drop=True)
+        destination = frozen_dir / name
+        part.to_csv(destination, index=False)
+        written[name] = destination
+        row_counts[name] = len(part)
 
+    # The competition test set passes through unchanged, so a byte comparison
+    # against data/raw stays meaningful.
+    test_destination = frozen_dir / "test.csv"
+    test_destination.write_bytes(raw_test.read_bytes())
+    written["test.csv"] = test_destination
+    row_counts["test.csv"] = len(pd.read_csv(test_destination))
 
-def require_frozen(frozen_dir: Path = paths.FROZEN_DIR) -> Manifest:
-    """Guard used by explore/tune/ensemble: verify, or refuse to run.
+    # The plan itself is sealed alongside the data it describes.
+    written["split_plan.json"] = Path(plan_path)
 
-    Raises:
-        RuntimeError: The data is not frozen, or its checksums do not match.
-    """
-    # TODO(freeze): if not is_frozen() or not verify(): raise RuntimeError.
-    raise NotImplementedError("require_frozen() is not implemented yet")
+    files = {name: _sha256(path) for name, path in written.items()}
+    manifest = Manifest(
+        frozen_at_utc=datetime.now(UTC).replace(microsecond=0).isoformat(),
+        seed=plan.seed,
+        git_sha=results_log._git_sha(),
+        files=files,
+        row_counts=row_counts,
+        dataset_sha256=_dataset_fingerprint(files),
+        manifest_path=frozen_dir / paths.MANIFEST.name,
+    )
+
+    manifest.manifest_path.write_text(
+        json.dumps(
+            {
+                "frozen_at_utc": manifest.frozen_at_utc,
+                "seed": manifest.seed,
+                "git_sha": manifest.git_sha,
+                "dataset_sha256": manifest.dataset_sha256,
+                "row_counts": manifest.row_counts,
+                "files": manifest.files,
+                "note": (
+                    "Immutable. See CLAUDE.md rule 1. Unfreezing is a human action; "
+                    "it invalidates every ledger row carrying this dataset_sha256."
+                ),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    if read_only:
+        # Guard rail only. The real constraint is the PreToolUse hook, which
+        # starts denying writes here the moment the manifest above exists.
+        for path in (*written.values(), manifest.manifest_path):
+            # Some filesystems refuse chmod; the manifest and the hook still
+            # protect us, so a failure here is not fatal.
+            with contextlib.suppress(OSError):
+                path.chmod(READ_ONLY)
+
+    if not verify(frozen_dir):
+        raise RuntimeError(
+            "freeze wrote the dataset but verification failed immediately afterwards; "
+            "do not trust this directory"
+        )
+    return manifest
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -116,18 +317,35 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--verify-only", action="store_true", help="check checksums, write nothing")
+    parser.add_argument("--frozen-dir", type=Path, default=paths.FROZEN_DIR)
     args = parser.parse_args(argv)
 
     if args.verify_only:
-        ok = verify()
-        print("frozen dataset OK" if ok else "FROZEN DATASET MISMATCH")
-        return 0 if ok else 1
+        ok = verify(args.frozen_dir)
+        if ok:
+            manifest = load_manifest(args.frozen_dir)
+            print(
+                f"frozen dataset OK: sha={manifest.dataset_sha256[:12]} "
+                f"frozen_at={manifest.frozen_at_utc} rows={manifest.row_counts}"
+            )
+            return 0
+        print(
+            "FROZEN DATASET MISMATCH (or not frozen). Every score computed against it "
+            "is suspect. Investigate and report — do not re-freeze."
+        )
+        return 1
 
-    manifest = freeze()
+    try:
+        manifest = freeze(frozen_dir=args.frozen_dir)
+    except (RuntimeError, FileNotFoundError, ValueError) as exc:
+        print(f"freeze failed: {exc}")
+        return 1
+
     print(
         f"frozen at {manifest.frozen_at_utc} "
         f"sha={manifest.dataset_sha256[:12]} rows={manifest.row_counts}"
     )
+    print("data/frozen is now immutable. Steps 5-7 read it; nothing writes to it.")
     return 0
 
 

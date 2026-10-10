@@ -97,8 +97,15 @@ CPU in seconds.
 
 | Step | State |
 |------|-------|
-| 1 `pull` | **implemented** — pulls 891 train / 418 test rows from Kaggle |
-| 2–7 | documented stubs |
+| 1 `pull` | **implemented** — 891 train / 418 test rows from Kaggle |
+| 2 `review` | **implemented** — audits 12 columns, flags leakage and encoding needs |
+| 3 `split` | **implemented** — 712 train / 179 holdout, stratified, seeded |
+| 4 `freeze` | **implemented** — dataset sealed, `sha=83a4db7c5e7b` |
+| 5–7 | documented stubs (the repeatable loop) |
+
+The data is frozen, so `make bootstrap` (steps 2–4) is done and will refuse to
+run again. From here the work is `make loop` (steps 5–7), which is the part an
+autonomous pass actually iterates.
 
 A stub is a real signature, a real result dataclass, real done criteria in its
 skill, and a `NotImplementedError` body with a TODO describing the
