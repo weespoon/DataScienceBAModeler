@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from titanic_agent import paths
+
 #: A tiny, hand-written stand-in for the Kaggle training file. Twelve rows is
 #: enough to exercise shapes, dtypes, missingness and a two-class target.
 TRAIN_ROWS: list[dict[str, object]] = [
@@ -248,3 +250,23 @@ def writable_frozen_dir(raw_dir: Path, tmp_path: Path) -> Path:
 def journal_path(tmp_path: Path) -> Path:
     """Path to a throwaway run journal (not yet created)."""
     return tmp_path / "experiments" / "run_log.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_real_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect every append-only artifact path into tmp_path, for every test.
+
+    Autouse and unconditional, because the failure it prevents is silent. Tests
+    that pass ``log_path=`` explicitly were safe; ``run_log.record()`` inside
+    ``tune`` and ``ensemble`` takes no such argument from its callers and fell
+    through to the real ``experiments/run_log.jsonl``. The suite wrote 167
+    fixture-sized entries into the production journal before ``make journal``
+    showed cv=0.4500 on a 12-row dataset and gave it away.
+
+    Belt and braces: a test should not be able to reach these paths even by
+    accident, and relying on every call site remembering to pass an override is
+    exactly the kind of discipline that fails quietly.
+    """
+    monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "artifacts" / "run_log.jsonl")
+    monkeypatch.setattr(paths, "HOLDOUT_READS", tmp_path / "artifacts" / "holdout_reads.json")
+    monkeypatch.setattr(paths, "RESULTS_LOG", tmp_path / "artifacts" / "results.csv")

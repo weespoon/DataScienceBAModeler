@@ -20,7 +20,7 @@ TOP_K ?= 4
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune ensemble \
-	test lint log status receipts bootstrap loop clean distclean
+	test lint log status next journal receipts bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -89,7 +89,13 @@ bootstrap: review split freeze ## Steps 2-4, run ONCE: audit, split, seal the da
 loop: explore tune ensemble ## Steps 5-7, repeatable: the autonomous iterate loop
 
 status: setup ## Which pipeline steps have completed, derived from artifacts on disk
-	$(PYTHON) -m titanic_agent.status
+	@$(PYTHON) -m titanic_agent.status
+
+next: setup ## Just the next incomplete step -- what the `run` skill loops on
+	@$(PYTHON) -m titanic_agent.status --next
+
+journal: setup ## Show the agent run journal (what the agent did, not what models scored)
+	@$(PYTHON) -m titanic_agent.run_log --tail 20
 
 receipts: setup ## Show the holdout read receipts
 	$(PYTHON) -m titanic_agent.receipts

@@ -110,8 +110,34 @@ chmod 0444 and every one is checksummed in the manifest.
 - Never commit `data/raw`, `data/frozen`, `.env` or `kaggle.json` — all four are
   gitignored. Credentials never appear in code, logs, reports or commit messages.
 
+## Tripwires — never yours alone
+
+Two actions are always a human's call, however reasonable they look in the
+moment. Refuse them, say why you think they are needed, and wait:
+
+1. **Unfreezing** — any `chmod`, delete, overwrite or re-freeze under
+   `data/frozen/`. A `PreToolUse` hook will refuse you. The correct response to
+   that refusal is to stop, not to look for another route.
+2. **`ensemble --score-holdout`** — the one irreversible measurement, once per
+   frozen dataset. It is deliberately absent from every `make` target so that
+   running the loop cannot trigger it.
+
+Record the refusal: `run_log.record("refused", step=..., detail=...)`. A refusal
+that leaves no trace is indistinguishable from never having considered it.
+
 ## When something is ambiguous
 
-Prefer the cheap, reversible option, write down the decision in the step's report,
-and keep going. The point of this repo is a full autonomous run with a legible
-trail, not a perfect leaderboard score.
+Prefer the cheap, reversible option, write down the decision in the step's report
+and in `experiments/run_log.jsonl`, and keep going. The point of this repo is a
+full autonomous run with a legible trail, not a perfect leaderboard score.
+
+But "keep going" stops at the tripwires above, and at anything irreversible that
+this file does not cover. The test is not *is this a good idea* — it is *can a
+human undo it tomorrow*. If not, ask.
+
+## Orchestration
+
+`.claude/skills/run/SKILL.md` drives a full pass: it decides the next step, runs
+it, checks that step's done criteria, journals the decision, and knows when to
+stop. The seven step skills are procedures; that one is the policy. Read it
+before running the pipeline unattended.
