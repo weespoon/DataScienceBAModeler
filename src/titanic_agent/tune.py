@@ -216,6 +216,11 @@ def search_space(model_key: str) -> dict[str, list[Any]]:
         "hist_gradient_boosting": {
             "clf__learning_rate": [0.05, 0.1],
             "clf__max_leaf_nodes": [15, 31],
+            # exp-004: regularisation, untuned until now. On ~570 rows the
+            # defaults (no L2, no depth cap) leave the trees free to memorise.
+            "clf__min_samples_leaf": [10, 20, 40],
+            "clf__l2_regularization": [0.0, 1.0],
+            "clf__max_depth": [3, None],
         },
         # Note the extra `estimator__` hop: the SVC sits inside a
         # CalibratedClassifierCV, so its params are one level deeper.

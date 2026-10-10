@@ -1,15 +1,15 @@
 {
-  "run_id": "20261010T192840-451d6d",
+  "run_id": "20261010T194619-ab4048",
   "method": "soft_vote",
   "members": [
-    "svc",
     "random_forest",
-    "logistic",
-    "hist_gradient_boosting"
+    "hist_gradient_boosting",
+    "svc",
+    "gradient_boosting"
   ],
-  "cv_score": 0.8102313305387362,
-  "cv_std": 0.020136606792182113,
-  "best_single_cv": 0.819034,
+  "cv_score": 0.8189566837447602,
+  "cv_std": 0.009427646572583966,
+  "best_single_cv": 0.818957,
   "holdout_score": null,
   "holdout_read": false
 }

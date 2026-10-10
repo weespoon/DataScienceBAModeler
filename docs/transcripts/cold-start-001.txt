@@ -1,0 +1,1084 @@
+▗ ▗   ▖ ▖  Claude Code v2.1.296
+           Opus 5.5 · Claude Max
+ ▘▘   ▝▝   ~/code/DataScienceBAModeler
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+❯ Run the next experiment.                                                      
+
+  Searched for 1 pattern, ran 4 shell commands (ctrl+o to expand)
+
+⏺ Pipeline's fully bootstrapped, frozen data checks out, and holdout remains
+  untouched—three closed experiments so far. I'm figuring out how to properly
+  open exp-004 through the container (rather than just make loop), then will
+  check the tune search spaces to pick the next backlog item.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ I'll run exp-004 by widening the hist_gradient_boosting search to add
+  regularization controls (min_samples_leaf, l2_regularization, max_depth),
+  since the current defaults apply no L2 penalty or depth cap at 569 rows. I'm
+  changing only this one thing so I can attribute the result directly to it.
+
+⏺ Update(src/titanic_agent/tune.py)
+  ⎿  Added 5 lines
+      216          "hist_gradient_boosting": {
+      217              "clf__learning_rate": [0.05, 0.1],
+      218              "clf__max_leaf_nodes": [15, 31],
+      219 +            # exp-004: regularisation, untuned until now. On ~
+          +570 rows the                                                  
+      220 +            # defaults (no L2, no depth cap) leave the trees f
+          +ree to memorise.                                              
+      221 +            "clf__min_samples_leaf": [10, 20, 40],            
+      222 +            "clf__l2_regularization": [0.0, 1.0],             
+      223 +            "clf__max_depth": [3, None],                      
+      224          },
+      225          # Note the extra `estimator__` hop: the SVC sits insid
+           e a
+      226          # CalibratedClassifierCV, so its params are one level 
+           deeper.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(make experiment-open NAME="hgb regularisation" 2>&1 | tail -5 && make
+      experiments | tail -1 && export TITANIC_PASS_ID=$(date +%Y%m%d-%H%M%Z) &&
+      .venv/bin/python…)
+  ⎿  opened exp-004-hgb-regularisation: 569 train / 143 val (seed 20251014)
+       exp-004-hgb-regularisation   open       cv=—        val=—
+     PASS=20261010-1545EDT
+     … +17 lines (ctrl+o to expand)
+  ⎿  Updated experiments/EXPERIMENTS.md (+1 -0)
+      12  | `exp-001-baseline` | closed | 569/143 | 0.8287 | — | Baseline
+           sweep of 8 models + soft-vote ensemble. CV over the full 712-r
+          ow working set; predates per-experiment val splits, so it has n
+          o val score. |
+      13  | `exp-002-wider-search` | abandoned | 569/143 | 0.8278 | 0.839
+          2 | ABANDONED: its validation score was contaminated. select_me
+          mbers inherited members tuned on the full working set, which in
+          cludes this experiment's own validation rows. Bug fixed; a fres
+          h split is needed, so exp-003 supersedes it. |
+      14  | `exp-003-wider-search` | closed | 569/143 | 0.8190 | 0.8462 |
+           Re-run of exp-002 after fixing the member-scoping leak. CV 0.8
+          190, val 0.8462 on 143 rows. No technique changed; this establi
+          shes a clean baseline under the experiment container. |
+      15 +| `exp-004-hgb-regularisation` | open | 569/143 | — | — |  |   
+      16  
+      17  ## The final test
+      18  
+  ⎿  Updated experiments/results.csv (+8 -0)
+      56  20261010T192835-2f557b,2026-10-10T19:28:35+00:00,tune,knn,"{""c
+          lf__n_neighbors"":3,""clf__weights"":""uniform"",""features"":[
+          ""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"",""Embar
+          ked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""AgeMissin
+          g""]}",0.783838,0.047235,5,20251010,83a4db7c5e7b0db3f74c67dc1f4
+          d2344d857686f528a18cd2a54120e32c163a9,8d65288-dirty,False,,2026
+          1010-1528EDT,0a92350789d68774860c16c88309eb88d5e7332bb41eb7d356
+          d6c64632f9386a,exp-003-wider-search
+      57  20261010T192840-451d6d,2026-10-10T19:28:40+00:00,ensemble,soft_
+          vote(svc+random_forest+logistic+hist_gradient_boosting),"{""mem
+          bers"":[""svc"",""random_forest"",""logistic"",""hist_gradient_
+          boosting""],""method"":""soft_vote"",""weights"":null}",0.81023
+          1,0.020137,5,20251010,83a4db7c5e7b0db3f74c67dc1f4d2344d857686f5
+          28a18cd2a54120e32c163a9,8d65288-dirty,False,"members=['svc', 'r
+          andom_forest', 'logistic', 'hist_gradient_boosting']; best_sing
+          le_cv=0.8190",20261010-1528EDT,99be542b52fb5d4ee79df8c3701e2d7f
+          ff048096351412d770c6950ad2285091,exp-003-wider-search
+      58  20261010T192841-8ce38f,2026-10-10T19:28:41+00:00,evaluate,svc,"
+          {""features"":[""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""
+          Parch"",""Embarked"",""FamilySize"",""IsAlone"",""Title"",""Dec
+          k"",""AgeMissing""],""val_rows"":143}",0.846154,,,20251013,83a4
+          db7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,8d
+          65288-dirty,False,validation score for exp-003-wider-search on 
+          143 held-back rows; best cv was 0.8190,20261010-1528EDT-2,d80a9
+          3f376167bba06fdf5b52b2bf92a95a9967f6429557213cace00aebf4b3b,exp
+          -003-wider-search
+      59 +20261010T194520-23304c,2026-10-10T19:45:20+00:00,tune,dummy,"{"
+         +"features"":[""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Pa
+         +rch"",""Embarked"",""FamilySize"",""IsAlone"",""Title"",""Deck"
+         +",""AgeMissing""]}",0.616876,0.003636,5,20251010,83a4db7c5e7b0d
+         +b3f74c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirt
+         +y,False,,20261010-1545EDT,169ee26aa2b0943d306478ca4ef3ad380b922
+         +aa6919701ee640cb103930277e4,exp-004-hgb-regularisation         
+      60 +20261010T194521-b2f58e,2026-10-10T19:45:21+00:00,tune,logistic,
+         +"{""clf__C"":0.1,""features"":[""Sex"",""Pclass"",""Age"",""Far
+         +e"",""SibSp"",""Parch"",""Embarked"",""FamilySize"",""IsAlone""
+         +,""Title"",""Deck"",""AgeMissing""]}",0.806660,0.028408,5,20251
+         +010,83a4db7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a54120e32c
+         +163a9,075a6fa-dirty,False,,20261010-1545EDT,4f1589127fe86c6e2e6
+         +02c29031ff103d94a6d01a6fde0534442d1ef1e4b938d,exp-004-hgb-regul
+         +arisation                                                      
+      61 +20261010T194527-4e8cb7,2026-10-10T19:45:27+00:00,tune,random_fo
+         +rest,"{""clf__max_depth"":8,""clf__min_samples_leaf"":3,""clf__
+         +n_estimators"":200,""features"":[""Sex"",""Pclass"",""Age"",""F
+         +are"",""SibSp"",""Parch"",""Embarked"",""FamilySize"",""IsAlone
+         +"",""Title"",""Deck"",""AgeMissing""]}",0.818957,0.010939,5,202
+         +51010,83a4db7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a54120e3
+         +2c163a9,075a6fa-dirty,False,,20261010-1545EDT,018bf17b0d889270d
+         +788360f38adb49f2506bfa6e4e4afca99511a589d43a78d,exp-004-hgb-reg
+         +ularisation                                                    
+      62 +20261010T194529-45ec0d,2026-10-10T19:45:29+00:00,tune,extra_tre
+         +es,"{""clf__max_depth"":8,""clf__n_estimators"":400,""features"
+         +":[""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"",""Em
+         +barked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""AgeMis
+         +sing""]}",0.804891,0.010815,5,20251010,83a4db7c5e7b0db3f74c67dc
+         +1f4d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,False,,2
+         +0261010-1545EDT,3ae6be217521f679bd8e866008ac9163e654b76bf123e24
+         +607fc75b3ef23872b,exp-004-hgb-regularisation                   
+      63 +20261010T194530-d06938,2026-10-10T19:45:30+00:00,tune,gradient_
+         +boosting,"{""clf__learning_rate"":0.05,""clf__max_depth"":2,""c
+         +lf__n_estimators"":200,""features"":[""Sex"",""Pclass"",""Age""
+         +,""Fare"",""SibSp"",""Parch"",""Embarked"",""FamilySize"",""IsA
+         +lone"",""Title"",""Deck"",""AgeMissing""]}",0.810231,0.013785,5
+         +,20251010,83a4db7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a541
+         +20e32c163a9,075a6fa-dirty,False,,20261010-1545EDT,2c95ada53428c
+         +ad9ac1b74076e021fb9a59114d0ab8a0231c7bef557121e29b1,exp-004-hgb
+         +-regularisation                                                
+      64 +20261010T194535-d04481,2026-10-10T19:45:35+00:00,tune,hist_grad
+         +ient_boosting,"{""clf__l2_regularization"":0.0,""clf__learning_
+         +rate"":0.05,""clf__max_depth"":null,""clf__max_leaf_nodes"":15,
+         +""clf__min_samples_leaf"":10,""features"":[""Sex"",""Pclass"","
+         +"Age"",""Fare"",""SibSp"",""Parch"",""Embarked"",""FamilySize""
+         +,""IsAlone"",""Title"",""Deck"",""AgeMissing""]}",0.818941,0.01
+         +6740,5,20251010,83a4db7c5e7b0db3f74c67dc1f4d2344d857686f528a18c
+         +d2a54120e32c163a9,075a6fa-dirty,False,,20261010-1545EDT,aea1689
+         +624c49ca03c47fbb60e9add75f228f37e9cf9ca119d733080ee90e6c2,exp-0
+         +04-hgb-regularisation                                          
+      65 +20261010T194535-93a323,2026-10-10T19:45:35+00:00,tune,svc,"{""c
+         +lf__estimator__C"":1.0,""clf__estimator__gamma"":""auto"",""fea
+         +tures"":[""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"
+         +",""Embarked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""
+         +AgeMissing""]}",0.815432,0.018751,5,20251010,83a4db7c5e7b0db3f7
+         +4c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,Fa
+         +lse,,20261010-1545EDT,a5341a17b9aceb3149658904203e30f021f753ccc
+         +d2c6234ea33d3e4d72dff0c,exp-004-hgb-regularisation             
+      66 +20261010T194535-fdaaf9,2026-10-10T19:45:35+00:00,tune,knn,"{""c
+         +lf__n_neighbors"":5,""clf__weights"":""uniform"",""features"":[
+         +""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"",""Embar
+         +ked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""AgeMissin
+         +g""]}",0.796072,0.019481,5,20251010,83a4db7c5e7b0db3f74c67dc1f4
+         +d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,False,,2026
+         +1010-1545EDT,a82bc77ac4caca6d832d693ec752f98d7478526072c197bf9b
+         +a4ed78a2810fb2,exp-004-hgb-regularisation                      
+  ⎿  Updated experiments/run_log.jsonl (+19 -0)
+       81  {"detail": "cv=0.8102", "event": "step_finished", "level": "in
+           fo", "pass_id": "20261010-1528EDT", "pid": 33606, "run_id": "2
+           0261010T192840-451d6d", "step": "ensemble", "timestamp_utc": "
+           2026-10-10T19:28:40+00:00"}
+       82  {"detail": "exp-003-wider-search validation: 0.8462 on 143 row
+           s (svc); cv was 0.8190", "event": "decision", "level": "decisi
+           on", "pass_id": "20261010-1528EDT-2", "pid": 33629, "step": "e
+           valuate", "timestamp_utc": "2026-10-10T19:28:41+00:00"}
+       83  {"detail": "closed exp-003-wider-search: best_cv=0.846154, val
+           =0.8461538461538461", "event": "decision", "level": "decision"
+           , "pass_id": "20261010-1528EDT-2", "pid": 33662, "step": "expe
+           riment", "timestamp_utc": "2026-10-10T19:28:53+00:00"}
+       84 +{"detail": "opened exp-004-hgb-regularisation: 569 train / 143
+          + val (seed 20251014), caps {'kaggle_notebooks': 20, 'papers': 
+          +10, 'web_fetches': 0, 'wall_clock_s': 1800, 'loop_passes': 3}"
+          +, "event": "decision", "level": "decision", "pass_id": "202610
+          +10-1545EDT", "pid": 37806, "step": "experiment", "timestamp_ut
+          +c": "2026-10-10T19:45:16+00:00"}                              
+       85 +{"detail": "exp-004 tests one lever: HGB regularisation (min_s
+          +amples_leaf, l2_regularization, max_depth) from the backlog. C
+          +ode change is uncommitted, so ledger rows carry -dirty.", "eve
+          +nt": "decision", "level": "decision", "pass_id": "20261010-154
+          +5EDT", "pid": 37814, "step": "experiment", "timestamp_utc": "2
+          +026-10-10T19:45:17+00:00"}                                    
+       86 +{"detail": "explore is not experiment-aware: it reads all 712 
+          +working rows, including exp-004 val rows. Its output does not 
+          +feed tune, so skipped rather than chart the val split.", "even
+          +t": "step_skipped", "level": "info", "pass_id": "20261010-1545
+          +EDT", "pid": 37814, "step": "explore", "timestamp_utc": "2026-
+          +10-10T19:45:17+00:00"}                                        
+       87 +{"detail": "dummy: 1 combos", "event": "step_started", "level"
+          +: "debug", "pass_id": "20261010-1545EDT", "pid": 37818, "step"
+          +: "tune", "timestamp_utc": "2026-10-10T19:45:18+00:00"}       
+       88 +{"detail": "dummy cv=0.6169 in 1.7s", "event": "step_finished"
+          +, "level": "info", "pass_id": "20261010-1545EDT", "pid": 37818
+          +, "run_id": "20261010T194520-23304c", "step": "tune", "timesta
+          +mp_utc": "2026-10-10T19:45:20+00:00"}                         
+       89 +{"detail": "logistic: 3 combos", "event": "step_started", "lev
+          +el": "debug", "pass_id": "20261010-1545EDT", "pid": 37818, "st
+          +ep": "tune", "timestamp_utc": "2026-10-10T19:45:20+00:00"}    
+       90 +{"detail": "logistic cv=0.8067 in 1.2s", "event": "step_finish
+          +ed", "level": "info", "pass_id": "20261010-1545EDT", "pid": 37
+          +818, "run_id": "20261010T194521-b2f58e", "step": "tune", "time
+          +stamp_utc": "2026-10-10T19:45:21+00:00"}                      
+       91 +{"detail": "random_forest: 12 combos", "event": "step_started"
+          +, "level": "debug", "pass_id": "20261010-1545EDT", "pid": 3781
+          +8, "step": "tune", "timestamp_utc": "2026-10-10T19:45:21+00:00
+          +"}                                                            
+       92 +{"detail": "random_forest cv=0.8190 in 5.9s", "event": "step_f
+          +inished", "level": "info", "pass_id": "20261010-1545EDT", "pid
+          +": 37818, "run_id": "20261010T194527-4e8cb7", "step": "tune", 
+          +"timestamp_utc": "2026-10-10T19:45:27+00:00"}                 
+       93 +{"detail": "extra_trees: 6 combos", "event": "step_started", "
+          +level": "debug", "pass_id": "20261010-1545EDT", "pid": 37818, 
+          +"step": "tune", "timestamp_utc": "2026-10-10T19:45:27+00:00"} 
+       94 +{"detail": "extra_trees cv=0.8049 in 2.1s", "event": "step_fin
+          +ished", "level": "info", "pass_id": "20261010-1545EDT", "pid":
+          + 37818, "run_id": "20261010T194529-45ec0d", "step": "tune", "t
+          +imestamp_utc": "2026-10-10T19:45:29+00:00"}                   
+       95 +{"detail": "gradient_boosting: 8 combos", "event": "step_start
+          +ed", "level": "debug", "pass_id": "20261010-1545EDT", "pid": 3
+          +7818, "step": "tune", "timestamp_utc": "2026-10-10T19:45:29+00
+          +:00"}                                                         
+       96 +{"detail": "gradient_boosting cv=0.8102 in 1.0s", "event": "st
+          +ep_finished", "level": "info", "pass_id": "20261010-1545EDT", 
+          +"pid": 37818, "run_id": "20261010T194530-d06938", "step": "tun
+          +e", "timestamp_utc": "2026-10-10T19:45:30+00:00"}             
+       97 +{"detail": "hist_gradient_boosting: 48 combos", "event": "step
+          +_started", "level": "debug", "pass_id": "20261010-1545EDT", "p
+          +id": 37818, "step": "tune", "timestamp_utc": "2026-10-10T19:45
+          +:30+00:00"}                                                   
+       98 +{"detail": "hist_gradient_boosting cv=0.8189 in 4.5s", "event"
+          +: "step_finished", "level": "info", "pass_id": "20261010-1545E
+          +DT", "pid": 37818, "run_id": "20261010T194535-d04481", "step":
+          + "tune", "timestamp_utc": "2026-10-10T19:45:35+00:00"}        
+       99 +{"detail": "svc: 6 combos", "event": "step_started", "level": 
+          +"debug", "pass_id": "20261010-1545EDT", "pid": 37818, "step": 
+          +"tune", "timestamp_utc": "2026-10-10T19:45:35+00:00"}         
+      100 +{"detail": "svc cv=0.8154 in 0.4s", "event": "step_finished", 
+          +"level": "info", "pass_id": "20261010-1545EDT", "pid": 37818, 
+          +"run_id": "20261010T194535-93a323", "step": "tune", "timestamp
+          +_utc": "2026-10-10T19:45:35+00:00"}                           
+      101 +{"detail": "knn: 6 combos", "event": "step_started", "level": 
+          +"debug", "pass_id": "20261010-1545EDT", "pid": 37818, "step": 
+          +"tune", "timestamp_utc": "2026-10-10T19:45:35+00:00"}         
+      102 +{"detail": "knn cv=0.7961 in 0.2s", "event": "step_finished", 
+          +"level": "info", "pass_id": "20261010-1545EDT", "pid": 37818, 
+          +"run_id": "20261010T194535-fdaaf9", "step": "tune", "timestamp
+          +_utc": "2026-10-10T19:45:35+00:00"}                           
+  ⎿  … 1 more file changed
+  ⎿  (timeout 10m)
+
+⏺ Random forest scored 0.8190, which matches exp-003's best CV. That's
+  suspicious, because the training splits are supposed to differ. I'm checking
+  that before going further.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Confirmed it's not a bug—the splits differ (only 19/143 overlapping rows), so
+  the score changes are likely just split variance rather than real model
+  improvement. I'll rerun the old HGB grid as a CV-only control on this same
+  split to isolate the cause, which won't cost any validation budget.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Members are de-duplicated by model, keeping the best row, so the control row
+  can't push itself into the ensemble unless it beats the wider grid. Running it
+  now.
+
+⏺ Bash(export TITANIC_PASS_ID=20261010-1545EDT && .venv/bin/python -c "
+      from titanic_agent import tune…)
+  ⎿                   HistGradientBoostingClassifier(learning_rate=0.05,
+                                                     max_leaf_nodes=15,
+                                                     random_state=20251010)
+     )]))
+  ⎿  Updated experiments/results.csv (+1 -0)
+      64  20261010T194535-d04481,2026-10-10T19:45:35+00:00,tune,hist_grad
+          ient_boosting,"{""clf__l2_regularization"":0.0,""clf__learning_
+          rate"":0.05,""clf__max_depth"":null,""clf__max_leaf_nodes"":15,
+          ""clf__min_samples_leaf"":10,""features"":[""Sex"",""Pclass"","
+          "Age"",""Fare"",""SibSp"",""Parch"",""Embarked"",""FamilySize""
+          ,""IsAlone"",""Title"",""Deck"",""AgeMissing""]}",0.818941,0.01
+          6740,5,20251010,83a4db7c5e7b0db3f74c67dc1f4d2344d857686f528a18c
+          d2a54120e32c163a9,075a6fa-dirty,False,,20261010-1545EDT,aea1689
+          624c49ca03c47fbb60e9add75f228f37e9cf9ca119d733080ee90e6c2,exp-0
+          04-hgb-regularisation
+      65  20261010T194535-93a323,2026-10-10T19:45:35+00:00,tune,svc,"{""c
+          lf__estimator__C"":1.0,""clf__estimator__gamma"":""auto"",""fea
+          tures"":[""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"
+          ",""Embarked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""
+          AgeMissing""]}",0.815432,0.018751,5,20251010,83a4db7c5e7b0db3f7
+          4c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,Fa
+          lse,,20261010-1545EDT,a5341a17b9aceb3149658904203e30f021f753ccc
+          d2c6234ea33d3e4d72dff0c,exp-004-hgb-regularisation
+      66  20261010T194535-fdaaf9,2026-10-10T19:45:35+00:00,tune,knn,"{""c
+          lf__n_neighbors"":5,""clf__weights"":""uniform"",""features"":[
+          ""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"",""Embar
+          ked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""AgeMissin
+          g""]}",0.796072,0.019481,5,20251010,83a4db7c5e7b0db3f74c67dc1f4
+          d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,False,,2026
+          1010-1545EDT,a82bc77ac4caca6d832d693ec752f98d7478526072c197bf9b
+          a4ed78a2810fb2,exp-004-hgb-regularisation
+      67 +20261010T194604-a64610,2026-10-10T19:46:04+00:00,tune,hist_grad
+         +ient_boosting,"{""clf__learning_rate"":0.05,""clf__max_leaf_nod
+         +es"":15,""features"":[""Sex"",""Pclass"",""Age"",""Fare"",""Sib
+         +Sp"",""Parch"",""Embarked"",""FamilySize"",""IsAlone"",""Title"
+         +",""Deck"",""AgeMissing""]}",0.815463,0.009631,5,20251010,83a4d
+         +b7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,075
+         +a6fa-dirty,False,"exp-004 CONTROL: pre-exp-004 HGB grid (lr x m
+         +ax_leaf_nodes only) on the same split and folds, to attribute t
+         +he gain from the regularisation grid",20261010-1545EDT,7f3cc02d
+         +9ae7fd4ac7897180f284aad6e4d40054cf35841f1471864822f30a02,exp-00
+         +4-hgb-regularisation                                           
+  ⎿  Updated experiments/run_log.jsonl (+2 -0)
+      100  {"detail": "svc cv=0.8154 in 0.4s", "event": "step_finished", 
+           "level": "info", "pass_id": "20261010-1545EDT", "pid": 37818, 
+           "run_id": "20261010T194535-93a323", "step": "tune", "timestamp
+           _utc": "2026-10-10T19:45:35+00:00"}
+      101  {"detail": "knn: 6 combos", "event": "step_started", "level": 
+           "debug", "pass_id": "20261010-1545EDT", "pid": 37818, "step": 
+           "tune", "timestamp_utc": "2026-10-10T19:45:35+00:00"}
+      102  {"detail": "knn cv=0.7961 in 0.2s", "event": "step_finished", 
+           "level": "info", "pass_id": "20261010-1545EDT", "pid": 37818, 
+           "run_id": "20261010T194535-fdaaf9", "step": "tune", "timestamp
+           _utc": "2026-10-10T19:45:35+00:00"}
+      103 +{"detail": "hist_gradient_boosting: 4 combos", "event": "step_
+          +started", "level": "debug", "pass_id": "20261010-1545EDT", "pi
+          +d": 37917, "step": "tune", "timestamp_utc": "2026-10-10T19:45:
+          +59+00:00"}                                                    
+      104 +{"detail": "hist_gradient_boosting cv=0.8155 in 4.9s", "event"
+          +: "step_finished", "level": "info", "pass_id": "20261010-1545E
+          +DT", "pid": 37917, "run_id": "20261010T194604-a64610", "step":
+          + "tune", "timestamp_utc": "2026-10-10T19:46:04+00:00"}        
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The wider grid only gains +0.0035, well within fold variance, and the best
+  config actually uses less regularization than the defaults—so the hypothesis
+  isn't supported, and most of the apparent gain over exp-003 was due to the
+  split. Moving on to run the ensemble next.
+
+⏺ Bash(export TITANIC_PASS_ID=20261010-1545EDT && make ensemble 2>&1 | tail -12)
+  ⎿  .venv/bin/python -m titanic_agent.ensemble --method soft_vote --top-k
+     4 --cv-folds 5
+     soft_vote: cv=0.8190 +/- 0.0094 (best single 0.8190) holdout=not read
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated experiments/results.csv (+1 -0)
+      65  20261010T194535-93a323,2026-10-10T19:45:35+00:00,tune,svc,"{""c
+          lf__estimator__C"":1.0,""clf__estimator__gamma"":""auto"",""fea
+          tures"":[""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"
+          ",""Embarked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""
+          AgeMissing""]}",0.815432,0.018751,5,20251010,83a4db7c5e7b0db3f7
+          4c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,Fa
+          lse,,20261010-1545EDT,a5341a17b9aceb3149658904203e30f021f753ccc
+          d2c6234ea33d3e4d72dff0c,exp-004-hgb-regularisation
+      66  20261010T194535-fdaaf9,2026-10-10T19:45:35+00:00,tune,knn,"{""c
+          lf__n_neighbors"":5,""clf__weights"":""uniform"",""features"":[
+          ""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"",""Embar
+          ked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""AgeMissin
+          g""]}",0.796072,0.019481,5,20251010,83a4db7c5e7b0db3f74c67dc1f4
+          d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,False,,2026
+          1010-1545EDT,a82bc77ac4caca6d832d693ec752f98d7478526072c197bf9b
+          a4ed78a2810fb2,exp-004-hgb-regularisation
+      67  20261010T194604-a64610,2026-10-10T19:46:04+00:00,tune,hist_grad
+          ient_boosting,"{""clf__learning_rate"":0.05,""clf__max_leaf_nod
+          es"":15,""features"":[""Sex"",""Pclass"",""Age"",""Fare"",""Sib
+          Sp"",""Parch"",""Embarked"",""FamilySize"",""IsAlone"",""Title"
+          ",""Deck"",""AgeMissing""]}",0.815463,0.009631,5,20251010,83a4d
+          b7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,075
+          a6fa-dirty,False,"exp-004 CONTROL: pre-exp-004 HGB grid (lr x m
+          ax_leaf_nodes only) on the same split and folds, to attribute t
+          he gain from the regularisation grid",20261010-1545EDT,7f3cc02d
+          9ae7fd4ac7897180f284aad6e4d40054cf35841f1471864822f30a02,exp-00
+          4-hgb-regularisation
+      68 +20261010T194619-ab4048,2026-10-10T19:46:19+00:00,ensemble,soft_
+         +vote(random_forest+hist_gradient_boosting+svc+gradient_boosting
+         +),"{""members"":[""random_forest"",""hist_gradient_boosting"","
+         +"svc"",""gradient_boosting""],""method"":""soft_vote"",""weight
+         +s"":null}",0.818957,0.009428,5,20251010,83a4db7c5e7b0db3f74c67d
+         +c1f4d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,False,"
+         +members=['random_forest', 'hist_gradient_boosting', 'svc', 'gra
+         +dient_boosting']; best_single_cv=0.8190",20261010-1545EDT,ab83d
+         +b7dd16c23aef06da237298974bfeadc5e581590c30dc98881944dac2088,exp
+         +-004-hgb-regularisation                                        
+  ⎿  Updated experiments/run_log.jsonl (+2 -0)
+      102  {"detail": "knn cv=0.7961 in 0.2s", "event": "step_finished", 
+           "level": "info", "pass_id": "20261010-1545EDT", "pid": 37818, 
+           "run_id": "20261010T194535-fdaaf9", "step": "tune", "timestamp
+           _utc": "2026-10-10T19:45:35+00:00"}
+      103  {"detail": "hist_gradient_boosting: 4 combos", "event": "step_
+           started", "level": "debug", "pass_id": "20261010-1545EDT", "pi
+           d": 37917, "step": "tune", "timestamp_utc": "2026-10-10T19:45:
+           59+00:00"}
+      104  {"detail": "hist_gradient_boosting cv=0.8155 in 4.9s", "event"
+           : "step_finished", "level": "info", "pass_id": "20261010-1545E
+           DT", "pid": 37917, "run_id": "20261010T194604-a64610", "step":
+            "tune", "timestamp_utc": "2026-10-10T19:46:04+00:00"}
+      105 +{"detail": "soft_vote over ['random_forest', 'hist_gradient_bo
+          +osting', 'svc', 'gradient_boosting']", "event": "step_started"
+          +, "level": "debug", "pass_id": "20261010-1545EDT", "pid": 3796
+          +9, "step": "ensemble", "timestamp_utc": "2026-10-10T19:46:14+0
+          +0:00"}                                                        
+      106 +{"detail": "cv=0.8190", "event": "step_finished", "level": "in
+          +fo", "pass_id": "20261010-1545EDT", "pid": 37969, "run_id": "2
+          +0261010T194619-ab4048", "step": "ensemble", "timestamp_utc": "
+          +2026-10-10T19:46:19+00:00"}                                   
+  ⎿  Updated reports/03_ensemble.json (+7 -7)
+       1  {
+       2 -  "run_id": "20261010T192840-451d6d",                          
+       2 +  "run_id": "20261010T194619-ab4048",                          
+       3    "method": "soft_vote",
+       4    "members": [
+       5 -    "svc",                                                     
+       5      "random_forest",
+       7 -    "logistic",                                                
+       8 -    "hist_gradient_boosting"                                   
+       6 +    "hist_gradient_boosting",                                  
+       7 +    "svc",                                                     
+       8 +    "gradient_boosting"                                        
+       9    ],
+      10 -  "cv_score": 0.8102313305387362,                              
+      11 -  "cv_std": 0.020136606792182113,                              
+      12 -  "best_single_cv": 0.819034,                                  
+      10 +  "cv_score": 0.8189566837447602,                              
+      11 +  "cv_std": 0.009427646572583966,                              
+      12 +  "best_single_cv": 0.818957,                                  
+      13    "holdout_score": null,
+      14    "holdout_read": false
+      15  }
+  ⎿  Updated reports/03_ensemble.md (+5 -5)
+       6  
+       7  | measure | value |
+       8  | --- | --- |
+       9 -| ensemble CV (soft_vote) | 0.8102 ± 0.0201 |                  
+       9 +| ensemble CV (soft_vote) | 0.8190 ± 0.0094 |                  
+      10  | best single model (CV) | 0.8190 |
+      11  | holdout | not read |
+      12  
+     ...
+      16  
+      17  | model | CV score | source run |
+      18  | --- | --- | --- |
+      19 -| `svc` | 0.8190 | `20261010T192835-7ee011` |                  
+      20 -| `random_forest` | 0.8172 | `20261010T192831-bbbc81` |        
+      21 -| `logistic` | 0.8015 | `20261010T192828-cad768` |             
+      22 -| `hist_gradient_boosting` | 0.8014 | `20261010T192835-aee6c0` 
+         -|                                                              
+      19 +| `random_forest` | 0.8190 | `20261010T194527-4e8cb7` |        
+      20 +| `hist_gradient_boosting` | 0.8189 | `20261010T194535-d04481` 
+         +|                                                              
+      21 +| `svc` | 0.8154 | `20261010T194535-93a323` |                  
+      22 +| `gradient_boosting` | 0.8102 | `20261010T194530-d06938` |    
+      23  
+      24  ## On the holdout number
+      25  
+  ⎿  Updated reports/submission.csv (+8 -8)
+      72  962,1
+      73  963,0
+      74  964,1
+      75 -965,0                                                          
+      75 +965,1                                                          
+      76  966,1
+      77  967,0
+      78  968,0
+     ...
+      86  976,0
+      87  977,0
+      88  978,1
+      89 -979,1                                                          
+      89 +979,0                                                          
+      90  980,1
+      91  981,1
+      92  982,1
+     ...
+      137  1027,0
+      138  1028,0
+      139  1029,0
+      140 -1030,0                                                        
+      140 +1030,1                                                        
+      141  1031,0
+      142  1032,0
+      143  1033,1
+     ...
+      243  1133,1
+      244  1134,0
+      245  1135,0
+      246 -1136,0                                                        
+      246 +1136,1                                                        
+      247  1137,0
+      248  1138,1
+      249  1139,0
+     ...
+      312  1202,0
+      313  1203,0
+      314  1204,0
+      315 -1205,1                                                        
+      315 +1205,0                                                        
+      316  1206,1
+      317  1207,1
+      318  1208,0
+     … 19 more lines (ctrl+o to expand)
+  ⎿  … 3 more files changed
+  ⎿  (timeout 5m)
+
+⏺ The ensemble matches the best single model at 0.8190, same as before, with the
+  holdout still untouched. Next I'll run the experiment's single validation
+  read, which stays separate from the locked final test.
+
+⏺ Bash(export TITANIC_PASS_ID=20261010-1545EDT && make experiment-evaluate 2>&1
+      | tail -5 && tail -1 experiments/val_reads.jsonl)
+  ⎿  exp-004-hgb-regularisation validation: 0.8671 on 143 held-back rows (c
+     v was 0.8190)
+     The final test is untouched — that one is read once for the whole prog
+     … +8 lines (ctrl+o to expand)
+  ⎿  Updated experiments/EXPERIMENTS.md (+1 -1)
+      12  | `exp-001-baseline` | closed | 569/143 | 0.8287 | — | Baseline
+           sweep of 8 models + soft-vote ensemble. CV over the full 712-r
+          ow working set; predates per-experiment val splits, so it has n
+          o val score. |
+      13  | `exp-002-wider-search` | abandoned | 569/143 | 0.8278 | 0.839
+          2 | ABANDONED: its validation score was contaminated. select_me
+          mbers inherited members tuned on the full working set, which in
+          cludes this experiment's own validation rows. Bug fixed; a fres
+          h split is needed, so exp-003 supersedes it. |
+      14  | `exp-003-wider-search` | closed | 569/143 | 0.8190 | 0.8462 |
+           Re-run of exp-002 after fixing the member-scoping leak. CV 0.8
+          190, val 0.8462 on 143 rows. No technique changed; this establi
+          shes a clean baseline under the experiment container. |
+      15 -| `exp-004-hgb-regularisation` | open | 569/143 | — | — |  |   
+      15 +| `exp-004-hgb-regularisation` | open | 569/143 | 0.8190 | 0.86
+         +71 |  |                                                        
+      16  
+      17  ## The final test
+      18  
+  ⎿  Updated experiments/exp-004-hgb-regularisation/experiment.json (+2 -2)
+      730      "loop_passes": 3
+      731    },
+      732    "spend": {},
+      733 -  "best_cv": null,                                            
+      734 -  "val_score": null,                                          
+      733 +  "best_cv": 0.818957,                                        
+      734 +  "val_score": 0.8671328671328671,                            
+      735    "summary": ""
+      736  }
+  ⎿  Updated experiments/results.csv (+1 -0)
+      66  20261010T194535-fdaaf9,2026-10-10T19:45:35+00:00,tune,knn,"{""c
+          lf__n_neighbors"":5,""clf__weights"":""uniform"",""features"":[
+          ""Sex"",""Pclass"",""Age"",""Fare"",""SibSp"",""Parch"",""Embar
+          ked"",""FamilySize"",""IsAlone"",""Title"",""Deck"",""AgeMissin
+          g""]}",0.796072,0.019481,5,20251010,83a4db7c5e7b0db3f74c67dc1f4
+          d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,False,,2026
+          1010-1545EDT,a82bc77ac4caca6d832d693ec752f98d7478526072c197bf9b
+          a4ed78a2810fb2,exp-004-hgb-regularisation
+      67  20261010T194604-a64610,2026-10-10T19:46:04+00:00,tune,hist_grad
+          ient_boosting,"{""clf__learning_rate"":0.05,""clf__max_leaf_nod
+          es"":15,""features"":[""Sex"",""Pclass"",""Age"",""Fare"",""Sib
+          Sp"",""Parch"",""Embarked"",""FamilySize"",""IsAlone"",""Title"
+          ",""Deck"",""AgeMissing""]}",0.815463,0.009631,5,20251010,83a4d
+          b7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a54120e32c163a9,075
+          a6fa-dirty,False,"exp-004 CONTROL: pre-exp-004 HGB grid (lr x m
+          ax_leaf_nodes only) on the same split and folds, to attribute t
+          he gain from the regularisation grid",20261010-1545EDT,7f3cc02d
+          9ae7fd4ac7897180f284aad6e4d40054cf35841f1471864822f30a02,exp-00
+          4-hgb-regularisation
+      68  20261010T194619-ab4048,2026-10-10T19:46:19+00:00,ensemble,soft_
+          vote(random_forest+hist_gradient_boosting+svc+gradient_boosting
+          ),"{""members"":[""random_forest"",""hist_gradient_boosting"","
+          "svc"",""gradient_boosting""],""method"":""soft_vote"",""weight
+          s"":null}",0.818957,0.009428,5,20251010,83a4db7c5e7b0db3f74c67d
+          c1f4d2344d857686f528a18cd2a54120e32c163a9,075a6fa-dirty,False,"
+          members=['random_forest', 'hist_gradient_boosting', 'svc', 'gra
+          dient_boosting']; best_single_cv=0.8190",20261010-1545EDT,ab83d
+          b7dd16c23aef06da237298974bfeadc5e581590c30dc98881944dac2088,exp
+          -004-hgb-regularisation
+      69 +20261010T194625-226d5d,2026-10-10T19:46:25+00:00,evaluate,rando
+         +m_forest,"{""features"":[""Sex"",""Pclass"",""Age"",""Fare"",""
+         +SibSp"",""Parch"",""Embarked"",""FamilySize"",""IsAlone"",""Tit
+         +le"",""Deck"",""AgeMissing""],""val_rows"":143}",0.867133,,,202
+         +51014,83a4db7c5e7b0db3f74c67dc1f4d2344d857686f528a18cd2a54120e3
+         +2c163a9,075a6fa-dirty,False,validation score for exp-004-hgb-re
+         +gularisation on 143 held-back rows; best cv was 0.8190,20261010
+         +-1545EDT,0659159d64d8cb0b29a2c3596caf633d5e084ab5caed8a54c06a9f
+         +59e1adc39e,exp-004-hgb-regularisation                          
+  ⎿  Updated experiments/run_log.jsonl (+1 -0)
+      104  {"detail": "hist_gradient_boosting cv=0.8155 in 4.9s", "event"
+           : "step_finished", "level": "info", "pass_id": "20261010-1545E
+           DT", "pid": 37917, "run_id": "20261010T194604-a64610", "step":
+            "tune", "timestamp_utc": "2026-10-10T19:46:04+00:00"}
+      105  {"detail": "soft_vote over ['random_forest', 'hist_gradient_bo
+           osting', 'svc', 'gradient_boosting']", "event": "step_started"
+           , "level": "debug", "pass_id": "20261010-1545EDT", "pid": 3796
+           9, "step": "ensemble", "timestamp_utc": "2026-10-10T19:46:14+0
+           0:00"}
+      106  {"detail": "cv=0.8190", "event": "step_finished", "level": "in
+           fo", "pass_id": "20261010-1545EDT", "pid": 37969, "run_id": "2
+           0261010T194619-ab4048", "step": "ensemble", "timestamp_utc": "
+           2026-10-10T19:46:19+00:00"}
+      107 +{"detail": "exp-004-hgb-regularisation validation: 0.8671 on 1
+          +43 rows (random_forest); cv was 0.8190", "event": "decision", 
+          +"level": "decision", "pass_id": "20261010-1545EDT", "pid": 380
+          +24, "step": "evaluate", "timestamp_utc": "2026-10-10T19:46:26+
+          +00:00"}                                                       
+  ⎿  Updated experiments/val_reads.jsonl (+1 -0)
+      1  {"experiment_id": "exp-002-wider-search", "model": "soft_vote(ra
+         ndom_forest+gradient_boosting+logistic+svc)", "run_id": "2026101
+         0T192716-de7e74", "score": 0.839161, "timestamp_utc": "2026-10-1
+         0T19:27:16+00:00"}
+      2  {"experiment_id": "exp-003-wider-search", "model": "svc", "run_i
+         d": "20261010T192841-8ce38f", "score": 0.846154, "timestamp_utc"
+         : "2026-10-10T19:28:41+00:00"}
+      3 +{"experiment_id": "exp-004-hgb-regularisation", "model": "random
+        +_forest", "run_id": "20261010T194625-226d5d", "score": 0.867133,
+        + "timestamp_utc": "2026-10-10T19:46:26+00:00"}                  
+
+⏺ The 0.8671 validation score exceeds the ~0.85 suspicion threshold, but it's
+  from the unchanged random forest model (not the HGB lever being tested) and
+  sits within noise of the 0.819 CV score at this sample size. I'll now run the
+  leakage checks and audit to confirm.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Structural checks pass, though I noticed make leakage mislabels the 0.8671
+  validation score as "best cv" (it's actually stored in cv_score). I'll note
+  this rather than fix it, then record findings and close out the experiment.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ I'm recording exp-004's findings, then closing it. First I'm checking how the
+  backlog retires an idea, so the HGB item doesn't stay queued as "untried".
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ The HGB item stays in the backlog by design: an idea tested once at low
+  confidence is meant to remain retryable. I'm writing the findings and closing
+  the experiment.
+
+⏺ Bash(export TITANIC_PASS_ID=20261010-1545EDT && .venv/bin/python -c "
+      from titanic_agent import findings as F, run_log…)
+  ⎿  ok
+     closed exp-004-hgb-regularisation (best cv 0.818957)
+     run summary -> runs/20261010-1545EDT/run.md
+     … +19 lines (ctrl+o to expand)
+  ⎿  Updated experiments/EXPERIMENTS.md (+1 -1)
+      12  | `exp-001-baseline` | closed | 569/143 | 0.8287 | — | Baseline
+           sweep of 8 models + soft-vote ensemble. CV over the full 712-r
+          ow working set; predates per-experiment val splits, so it has n
+          o val score. |
+      13  | `exp-002-wider-search` | abandoned | 569/143 | 0.8278 | 0.839
+          2 | ABANDONED: its validation score was contaminated. select_me
+          mbers inherited members tuned on the full working set, which in
+          cludes this experiment's own validation rows. Bug fixed; a fres
+          h split is needed, so exp-003 supersedes it. |
+      14  | `exp-003-wider-search` | closed | 569/143 | 0.8190 | 0.8462 |
+           Re-run of exp-002 after fixing the member-scoping leak. CV 0.8
+          190, val 0.8462 on 143 rows. No technique changed; this establi
+          shes a clean baseline under the experiment container. |
+      15 -| `exp-004-hgb-regularisation` | open | 569/143 | 0.8190 | 0.86
+         -71 |  |                                                        
+      15 +| `exp-004-hgb-regularisation` | closed | 569/143 | 0.8190 | 0.
+         +8671 | Widened HGB search with regularisation params (min_sampl
+         +es_leaf, l2, max_depth). Same-split control: +0.0035 CV, within
+         + noise; winner used less regularisation than default. Best CV 0
+         +.8190 (RF; ensemble ties); val 0.8671 on 143 rows scored RF, no
+         +t the changed model. Inconclusive. |                           
+      16  
+      17  ## The final test
+      18  
+  ⎿  Updated experiments/exp-004-hgb-regularisation/experiment.json (+3 -3)
+       1  {
+       2    "experiment_id": "exp-004-hgb-regularisation",
+       3    "name": "hgb regularisation",
+       4 -  "status": "open",                                            
+       4 +  "status": "closed",                                          
+       5    "seed": 20251014,
+       6    "created_utc": "2026-10-10T19:45:16+00:00",
+       7 -  "closed_utc": "",                                            
+       7 +  "closed_utc": "2026-10-10T19:47:00+00:00",                   
+       8    "working_set_sha": "83a4db7c5e7b0db3f74c67dc1f4d2344d857686f5
+          28a18cd2a54120e32c163a9",
+       9    "train_ids": [
+      10      1,
+     ...
+      732    "spend": {},
+      733    "best_cv": 0.818957,
+      734    "val_score": 0.8671328671328671,
+      735 -  "summary": ""                                               
+      735 +  "summary": "Widened HGB search with regularisation params (m
+          +in_samples_leaf, l2, max_depth). Same-split control: +0.0035 C
+          +V, within noise; winner used less regularisation than default.
+          + Best CV 0.8190 (RF; ensemble ties); val 0.8671 on 143 rows sc
+          +ored RF, not the changed model. Inconclusive."                
+      736  }
+  ⎿  Created experiments/exp-004-hgb-regularisation/findings.md (+24 -0)
+       1 +# Findings                                                     
+       2 +                                                               
+       3 +Claims with evidence, from experiment `exp-004-hgb-regularisati
+         +on`. Rendered from the append-only                             
+       4 +`experiments/findings.jsonl` — edit that through `findings.reco
+         +rd()`,                                                         
+       5 +never this file.                                               
+       6 +                                                               
+       7 +## Confirmed (2)                                               
+       8 +                                                               
+       9 +- **+0.0175** Cross-experiment CV deltas are dominated by the s
+         +plit, not the technique _(confidence: medium)_ — evidence: `202
+         +61010T194535-d04481`, `20261010T194604-a64610`                 
+      10 +  - HGB rose 0.8014 (exp-003) -> 0.8189 (exp-004), but the same
+         +-split control accounts for all but 0.0035 of that; gradient_bo
+         +osting, extra_trees and logistic also rose 0.005-0.012 with no 
+         +change. Compare techniques within one experiment via a control 
+         +row, never across experiments.                                 
+      11 +- Validation 0.8671 vs CV 0.8190 on 143 rows is noise, and meas
+         +ures random_forest, not the lever under test _(confidence: low)
+         +_ — evidence: `20261010T194625-226d5d`                         
+      12 +  - SE on 143 rows ~0.032, so +0.048 is ~1.5 SE. Above the ~0.8
+         +5 suspect line, but the model is an unchanged RF and make leaka
+         +ge is clean. Second experiment running with val > CV (exp-003 +
+         +0.027); worth watching, not yet a pattern.                     
+      13 +                                                               
+      14 +## Inconclusive (1)                                            
+      15 +                                                               
+      16 +- **+0.0035** Widening HGB with min_samples_leaf / l2_regulariz
+         +ation / max_depth does not measurably help _(confidence: low)_ 
+         +— evidence: `20261010T194535-d04481`, `20261010T194604-a64610` 
+      17 +  - Same split, same folds: wide grid 0.8189 vs old grid (contr
+         +ol) 0.8155, +0.0035 against a ~0.017 fold std. The winner chose
+         + LESS regularisation than default (min_samples_leaf=10, l2=0, n
+         +o depth cap), so the regularisation hypothesis is not supported
+         + either way.                                                   
+      18 +                                                               
+      19 +## Untried (2)                                                 
+      20 +                                                               
+      21 +- evaluate scores whichever model has the best CV, so the val r
+         +ead often does not test the experiment's change _(confidence: l
+         +ow)_                                                           
+      22 +  - exp-004 changed HGB; evaluate scored RF (0.81896 vs HGB 0.8
+         +1894). A per-experiment val read is only diagnostic of the leve
+         +r if it scores the changed model, or the experiment pre-declare
+         +s which model it is testing.                                   
+      23 +- explore is not experiment-aware: it charts all 712 working ro
+         +ws, including the open experiment's val rows _(confidence: low)
+         +_                                                              
+      24 +  - Skipped explore in exp-004 for this reason. Harmless while 
+         +features are fixed in code, but any feature chosen from explore
+         + output would have seen val rows.                              
+  ⎿  Updated experiments/findings.jsonl (+5 -0)
+       8  {"claim": "Ensemble members must be scoped to the current exper
+          iment, not just the frozen dataset", "confidence": "high", "del
+          ta": null, "evidence": ["20261010T192716-de7e74"], "experiment_
+          id": "exp-002-wider-search", "note": "Two experiments share a f
+          rozen_sha256 by construction, so that filter alone never separa
+          tes them.", "recorded_utc": "2026-10-10T19:28:15+00:00", "sourc
+          e": "ours", "status": "confirmed"}
+       9  {"claim": "Validation 0.8462 vs CV 0.8190 on 143 rows -- the ga
+          p is within noise, not evidence of improvement", "confidence": 
+          "low", "delta": null, "evidence": ["see evaluate row"], "experi
+          ment_id": "exp-003-wider-search", "note": "143 rows carries rou
+          ghly +/-4%. A 0.027 gap is well inside that; reading it as a re
+          al gain would be exactly the mistake these splits exist to prev
+          ent.", "recorded_utc": "2026-10-10T19:28:52+00:00", "source": "
+          ours", "status": "confirmed"}
+      10  {"claim": "Training on 569 rows instead of 712 costs roughly 0.
+          006-0.010 CV", "confidence": "medium", "delta": null, "evidence
+          ": ["exp-003 tune rows"], "experiment_id": "exp-003-wider-searc
+          h", "note": "Best single fell 0.8287 (712 rows, exp-001) -> 0.8
+          225 (569 rows, exp-002/3). That is the price of a per-experimen
+          t val split, and it is worth paying.", "recorded_utc": "2026-10
+          -10T19:28:52+00:00", "source": "ours", "status": "confirmed"}
+      11 +{"claim": "Widening HGB with min_samples_leaf / l2_regularizati
+         +on / max_depth does not measurably help", "confidence": "low", 
+         +"delta": 0.0035, "evidence": ["20261010T194535-d04481", "202610
+         +10T194604-a64610"], "experiment_id": "exp-004-hgb-regularisatio
+         +n", "note": "Same split, same folds: wide grid 0.8189 vs old gr
+         +id (control) 0.8155, +0.0035 against a ~0.017 fold std. The win
+         +ner chose LESS regularisation than default (min_samples_leaf=10
+         +, l2=0, no depth cap), so the regularisation hypothesis is not 
+         +supported either way.", "recorded_utc": "2026-10-10T19:47:00+00
+         +:00", "source": "ours", "status": "inconclusive"}              
+      12 +{"claim": "Cross-experiment CV deltas are dominated by the spli
+         +t, not the technique", "confidence": "medium", "delta": 0.0175,
+         + "evidence": ["20261010T194535-d04481", "20261010T194604-a64610
+         +"], "experiment_id": "exp-004-hgb-regularisation", "note": "HGB
+         + rose 0.8014 (exp-003) -> 0.8189 (exp-004), but the same-split 
+         +control accounts for all but 0.0035 of that; gradient_boosting,
+         + extra_trees and logistic also rose 0.005-0.012 with no change.
+         + Compare techniques within one experiment via a control row, ne
+         +ver across experiments.", "recorded_utc": "2026-10-10T19:47:00+
+         +00:00", "source": "ours", "status": "confirmed"}               
+      13 +{"claim": "Validation 0.8671 vs CV 0.8190 on 143 rows is noise,
+         + and measures random_forest, not the lever under test", "confid
+         +ence": "low", "delta": null, "evidence": ["20261010T194625-226d
+         +5d"], "experiment_id": "exp-004-hgb-regularisation", "note": "S
+         +E on 143 rows ~0.032, so +0.048 is ~1.5 SE. Above the ~0.85 sus
+         +pect line, but the model is an unchanged RF and make leakage is
+         + clean. Second experiment running with val > CV (exp-003 +0.027
+         +); worth watching, not yet a pattern.", "recorded_utc": "2026-1
+         +0-10T19:47:00+00:00", "source": "ours", "status": "confirmed"} 
+      14 +{"claim": "evaluate scores whichever model has the best CV, so 
+         +the val read often does not test the experiment's change", "con
+         +fidence": "low", "delta": null, "evidence": [], "experiment_id"
+         +: "exp-004-hgb-regularisation", "note": "exp-004 changed HGB; e
+         +valuate scored RF (0.81896 vs HGB 0.81894). A per-experiment va
+         +l read is only diagnostic of the lever if it scores the changed
+         + model, or the experiment pre-declares which model it is testin
+         +g.", "recorded_utc": "2026-10-10T19:47:00+00:00", "source": "ou
+         +rs", "status": "untried"}                                      
+      15 +{"claim": "explore is not experiment-aware: it charts all 712 w
+         +orking rows, including the open experiment's val rows", "confid
+         +ence": "low", "delta": null, "evidence": [], "experiment_id": "
+         +exp-004-hgb-regularisation", "note": "Skipped explore in exp-00
+         +4 for this reason. Harmless while features are fixed in code, b
+         +ut any feature chosen from explore output would have seen val r
+         +ows.", "recorded_utc": "2026-10-10T19:47:00+00:00", "source": "
+         +ours", "status": "untried"}                                    
+  ⎿  Updated experiments/run_log.jsonl (+4 -0)
+      105  {"detail": "soft_vote over ['random_forest', 'hist_gradient_bo
+           osting', 'svc', 'gradient_boosting']", "event": "step_started"
+           , "level": "debug", "pass_id": "20261010-1545EDT", "pid": 3796
+           9, "step": "ensemble", "timestamp_utc": "2026-10-10T19:46:14+0
+           0:00"}
+      106  {"detail": "cv=0.8190", "event": "step_finished", "level": "in
+           fo", "pass_id": "20261010-1545EDT", "pid": 37969, "run_id": "2
+           0261010T194619-ab4048", "step": "ensemble", "timestamp_utc": "
+           2026-10-10T19:46:19+00:00"}
+      107  {"detail": "exp-004-hgb-regularisation validation: 0.8671 on 1
+           43 rows (random_forest); cv was 0.8190", "event": "decision", 
+           "level": "decision", "pass_id": "20261010-1545EDT", "pid": 380
+           24, "step": "evaluate", "timestamp_utc": "2026-10-10T19:46:26+
+           00:00"}
+      108 +{"detail": "closed exp-004-hgb-regularisation: best_cv=0.86713
+          +3, val=0.8671328671328671", "event": "decision", "level": "dec
+          +ision", "pass_id": "20261010-1545EDT", "pid": 38131, "step": "
+          +experiment", "timestamp_utc": "2026-10-10T19:47:00+00:00"}    
+      109 +{"detail": "exp-004: 8 models + 1 HGB control; best RF 0.8190,
+          + HGB 0.8189 (control 0.8155)", "event": "step_finished", "leve
+          +l": "info", "pass_id": "20261010-1545EDT", "pid": 38136, "step
+          +": "tune", "timestamp_utc": "2026-10-10T19:47:01+00:00"}      
+      110 +{"detail": "soft_vote top-4 0.8190, ties best single; holdout 
+          +not read", "event": "step_finished", "level": "info", "pass_id
+          +": "20261010-1545EDT", "pid": 38136, "step": "ensemble", "time
+          +stamp_utc": "2026-10-10T19:47:01+00:00"}                      
+      111 +{"detail": "stopped: experiment exp-004 complete (open/tune/en
+          +semble/evaluate/close). Code change uncommitted; awaiting huma
+          +n on commit.", "event": "decision", "level": "decision", "pass
+          +_id": "20261010-1545EDT", "pid": 38136, "step": "", "timestamp
+          +_utc": "2026-10-10T19:47:01+00:00"}                           
+  ⎿  … 1 more file changed
+
+⏺ I ran exp-004, which widened the hist-gradient-boosting search with
+  regularisation settings. It made no real difference: on the same split, the
+  wider grid scored 0.8189 against 0.8155 for the old grid, and that gap is well
+  within the ~0.017 spread between folds. I've closed it as inconclusive.
+
+  How I ran it: the run skill only describes make loop and never mentions
+  experiments, while EXPERIMENTS.md and make help describe an open → tune →
+  evaluate → close lifecycle. I followed the lifecycle, because running the loop
+  with nothing open would train on the rows set aside as the next experiment's
+  validation set. The run skill should probably be updated to match.
+
+  Results
+  - No measurable gain. The best configuration also used less regularisation
+    than the defaults, so the idea behind the experiment isn't supported.
+  - The jump from exp-003 is mostly the new split. Compared with exp-003, HGB
+    looked 0.0175 better, but the same-split control rerun of the old grid
+    accounts for all but 0.0035 of that. Other models I didn't touch rose
+    0.005–0.012 as well. Comparisons between experiments mostly measure the
+    split; I recorded that as a finding.
+  - Best CV was 0.8190, from random forest; the ensemble tied it. The
+    majority-class baseline is 0.6169.
+  - Validation was 0.8671 on 143 rows. That's above the ~0.85 line the rules say
+    to treat as suspect, but:
+    - it scored random forest, which this experiment didn't change, so it says
+      nothing about HGB;
+    - it's about 1.5 standard errors from CV, which is ordinary noise at 143
+      rows;
+    - make leakage and make audit both pass.
+
+    This is the second experiment in a row with validation above CV. I noted it
+    to watch, but it's not a pattern yet.
+  - The rules held. The frozen data still verifies and the locked 179-row final
+    test hasn't been read.
+
+  Things I noticed but didn't fix (logged as untried findings)
+  1. evaluate scores whichever model has the best CV, so the one validation read
+     often doesn't test what the experiment changed.
+  2. explore reads all 712 rows, including the open experiment's validation
+     rows, so I skipped it for this run.
+  3. make leakage labels the validation score "best cv", because evaluate stores
+     it in the cv_score column.
+  4. I didn't journal step_started events, so the journal is incomplete against
+     the run skill's checklist.
+
+  Needs you: the grid change to src/titanic_agent/tune.py isn't committed, so
+  every exp-004 ledger row carries a -dirty git SHA. The experiment's outputs
+  are also uncommitted. Should I commit them, on main or on a branch?
+
+  The next cheap backlog item is widening the logistic regression search.
+
+✻ Brewed for 3m 48s · done 3:47 PM
+
+❯ make experiments                                                              
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ There are four experiments, and none is currently open.
+
+  Experiment: exp-001-baseline
+  Status: closed
+  Best CV: 0.8287
+  Val: —
+  Notes: CV on all 712 rows; predates per-experiment validation splits
+  ────────────────────────────────────────
+  Experiment: exp-002-wider-search
+  Status: abandoned
+  Best CV: 0.8278
+  Val: 0.8392
+  Notes: Validation score contaminated by the member-scoping leak
+  ────────────────────────────────────────
+  Experiment: exp-003-wider-search
+  Status: closed
+  Best CV: 0.8190
+  Val: 0.8462
+  Notes: Clean re-run of exp-002; the baseline under the experiment container
+  ────────────────────────────────────────
+  Experiment: exp-004-hgb-regularisation
+  Status: closed
+  Best CV: 0.8190
+  Val: 0.8671
+  Notes: Wider HGB search; +0.0035 against a same-split control, within noise
+
+  Two caveats when reading this table:
+  - exp-001's CV isn't comparable to the rest. It trained on 712 rows, while the
+    others trained on 569, and the smaller set costs about 0.006–0.010 CV.
+  - Differences between experiments are mostly split noise. Each validation
+    number comes from a different 143-row split, with a standard error of about
+    ±0.03. The rise from 0.846 to 0.867 also scored random forest, which exp-004
+    didn't change, so it's not evidence that the HGB change helped.
+✻ Churned for 6s · done 3:49 PM
+
+❯ make audit                                                                    
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The audit passed with no violations. Every pass line checked out:
+
+  - Rule 1: all four frozen files match their checksums.
+  - Rule 2: the holdout has never been read, and no ledger row claims it was.
+    There are 3 validation reads across 4 experiments; exp-001 predates
+    validation splits, so it has none.
+  - Rule 3: the 49 chained ledger rows are intact.
+  - Rule 4: feature provenance, external reads, score plausibility and stray
+    files are all clean.
+
+  Four notes, none of them failures:
+
+  - Uncommitted code: all 68 ledger rows came from a dirty working tree, not
+    just exp-004's. Every past run was made with uncommitted changes, so none
+    can be tied exactly to committed code. Committing before the next experiment
+    would make its rows the first clean ones.
+  - Chain rebuild: the hash chain was rebuilt once, during a migration from 15
+    to 16 columns. It only proves nothing was removed since that rebuild.
+  - Unchained rows: 19 rows predate the hash chain, so they can't be verified.
+  - Score plausibility label: the check reports "best cv 0.8671", but that's
+    exp-004's validation score, which evaluate stores in the cv_score column.
+    The real best CV in exp-004 is 0.8190. It passes either way, but the check
+    is reading the wrong number. I logged this as an untried finding.
+
+  The rebuild and the unchained rows predate this session. The one thing waiting
+  on you is still whether to commit the HGB grid change and the exp-004
+  outputs, and whether that goes on main or a branch.
+
+✻ Brewed for 8s · done 3:49 PM
+
+❯ make leakage                                                                  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All four leakage checks pass, the same result as the Rule 4 lines in make 
+  audit:
+
+  - Feature provenance: every logged feature is one of the 17 columns that can
+    be derived from the data.
+  - External reads: no module reads data from outside the sanctioned
+    directories.
+  - Score plausibility: passes, but with two caveats below.
+  - Stray data files: only the expected files are present.
+
+  The score plausibility check has two problems:
+
+  1. It's reading the wrong number. The 0.8671 it calls "best cv" is exp-004's
+     validation score, which evaluate stores in the cv_score column. The real
+     best CV is 0.8190.
+  2. Its threshold is looser than the rule. The check only flags scores above
+     0.90, but CLAUDE.md says to treat anything above ~0.85 as suspect. So
+     0.8671 passes here even though the written rule would flag it.
+
+  I looked into that 0.8671 by hand. It's an unchanged random forest scored once
+  on 143 rows, about 1.5 standard errors above its CV, which is consistent with
+  noise. It doesn't look like a lookup.
+
+  Should the check flag anything between 0.85 and 0.90 as a warning? That's a
+  small code change, and I'd also make it skip validation rows. I haven't made
+  either change.
+
+✻ Churned for 7s · done 3:49 PM
+
+❯ make receipts                                                                 
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The holdout has never been read: experiments/holdout_reads.json has no
+  receipts. That matches the audit, where no ledger row claims a holdout read.
+
+  Each experiment's one validation read is recorded separately in
+  experiments/val_reads.jsonl. There are three so far, from exp-002, exp-003 and
+  exp-004.
+
+  The holdout read is still yours to trigger, and it can only happen once for
+  this frozen dataset. I'd hold it until you're done running experiments, so
+  that its number can't steer which experiment comes next.
+
+✻ Cooked for 5s · done 3:49 PM
+
+❯ make journal --decisions                                                      
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ make would read --decisions as its own flag, and the journal target doesn't
+  pass extra arguments through, so I'm calling the module directly with the same
+  --tail 20 the target uses:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ These are the last 20 decision-level entries in the journal. They go back to
+  an earlier session's holdout refusal, then cover every experiment's open,
+  evaluate and close, ending with my stop for exp-004.
+
+  ┌─────────────┬────────────────────────────────────────────────────────────┐
+  │ Time (UTC)  │                       What happened                        │
+  ├─────────────┼────────────────────────────────────────────────────────────┤
+  │             │ Refused ensemble --score-holdout: it's an irreversible     │
+  │ 18:23       │ read and needs a human. Then stopped because the pipeline  │
+  │             │ was complete.                                              │
+  ├─────────────┼────────────────────────────────────────────────────────────┤
+  │ 19:15       │ exp-001 opened and closed immediately, wrapping the        │
+  │             │ earlier baseline after the fact.                           │
+  ├─────────────┼────────────────────────────────────────────────────────────┤
+  │ 19:26–19:28 │ exp-002 opened, scored 0.8392 on validation, then was      │
+  │             │ abandoned because of the leak.                             │
+  ├─────────────┼────────────────────────────────────────────────────────────┤
+  │ 19:28       │ exp-003 opened, scored 0.8462 on validation (svc), and     │
+  │             │ closed.                                                    │
+  ├─────────────┼────────────────────────────────────────────────────────────┤
+  │             │ exp-004 opened, I logged that it tests one change, it      │
+  │ 19:45–19:47 │ scored 0.8671 on validation (random_forest), and it        │
+  │             │ closed.                                                    │
+  ├─────────────┼────────────────────────────────────────────────────────────┤
+  │ 19:47       │ My stop entry: exp-004 is done, and committing waits on    │
+  │             │ you.                                                       │
+  └─────────────┴────────────────────────────────────────────────────────────┘
+
+  There's a bug in the "closed" lines. For exp-002, exp-003 and exp-004, the
+  journal's best_cv is actually the validation score (0.8392, 0.8462 and
+  0.8671). The real CVs are 0.8278, 0.8190 and 0.8190.
+  - Cause: close_experiment takes the highest cv_score across all of the
+    experiment's ledger rows, and that now includes the evaluate row, where
+    evaluate stores the validation score.
+  - What's affected: experiment.json and make experiments show the right values,
+    because evaluate saves best_cv before close runs. The journal lines don't.
+  - Same cause as two earlier issues: the mislabelled "best cv 0.8671" in make 
+    leakage and make audit.
+
+  The cleanest fix is to filter evaluate rows out wherever "best CV" is
+  computed, which is about a one-line filter in each place. The journal is
+  append-only, so the three wrong lines stay; a fix would only correct future
+  entries.
+
+  My step_skipped entry for explore isn't shown because it's info-level, not a
+  decision. Run .venv/bin/python -m titanic_agent.run_log --pass-id 
+  20261010-1545EDT to see everything from this pass.
+
+✻ Churned for 16s · done 3:50 PM
