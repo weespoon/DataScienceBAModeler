@@ -90,13 +90,20 @@ CPU in seconds.
 
 ## Status
 
-Scaffolding stage. Every pipeline module is a documented stub: real signatures,
-real dataclasses, real done criteria, `NotImplementedError` bodies with a TODO
-describing the implementation. `results_log.py` is implemented, because the
-ledger is plumbing that everything else depends on.
+| Step | State |
+|------|-------|
+| 1 `pull` | **implemented** — pulls 891 train / 418 test rows from Kaggle |
+| 2–7 | documented stubs |
+
+A stub is a real signature, a real result dataclass, real done criteria in its
+skill, and a `NotImplementedError` body with a TODO describing the
+implementation. `results_log.py` is implemented too, because the ledger is
+plumbing everything else depends on.
 
 The smoke tests pin each module's public contract and mark the
 not-yet-implemented calls `xfail`, so they flip to passing as the steps land.
+Implemented steps get real tests instead: step 1 has 21, none of which touch
+the network.
 
 ## License
 
