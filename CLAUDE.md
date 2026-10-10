@@ -108,6 +108,30 @@ chmod 0444 and every one is checksummed in the manifest.
   reproducible, and the column exists to say so out loud.
 - `make log` prints the ledger. Compare only rows sharing a `frozen_sha256`.
 
+## Rule 4 — do not look up the answers
+
+The real Titanic passenger manifest is public: all 1309 passengers, with who
+survived. A model that joins against it is not predicting anything.
+
+This is not about Kaggle etiquette. **Our locked final test is 179 of those same
+passengers**, so a lookup inflates the one number this whole programme is built
+around. `make audit` would stay green. The ledger would chain cleanly. Rules 1–3
+would all hold. Nothing else here would notice — which is exactly why this is a
+rule rather than a convention.
+
+- **External data about actual Titanic passengers is out of bounds.** The
+  manifest, any derived lookup table, any "feature" that is a join against one.
+- **"It scored higher" is never a justification.** If you cannot say why a
+  technique should generalise, it does not go in the backlog and it does not get
+  run.
+- **Treat any reported score above ~0.85 as suspect.** The honest ceiling on 891
+  labelled rows is roughly 0.80–0.84. Public notebooks above that are
+  disproportionately doing the lookup.
+- `make leakage` checks this structurally: feature provenance, external reads,
+  score plausibility, stray data files. Run it after acting on anything read
+  externally. It raises the cost and makes an attempt visible; it cannot make
+  cheating impossible, which is why the three points above come first.
+
 ## Conventions
 
 - Paths come from `titanic_agent.paths`. Don't hardcode `data/...` anywhere else.

@@ -20,7 +20,7 @@ TOP_K ?= 4
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune ensemble \
-	test lint log status next journal receipts audit introspect experiments experiment-open experiment-close findings backlog runs summary bootstrap loop clean distclean
+	test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-close findings backlog runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -115,6 +115,9 @@ audit: setup ## Did the three rules hold? Reads manifest, ledger chain and recei
 
 introspect: setup ## Are our search spaces valid against the INSTALLED sklearn?
 	@$(PYTHON) -m titanic_agent.introspect
+
+leakage: setup ## Rule 4: structural guards against looking up the answers
+	@$(PYTHON) -m titanic_agent.leakage
 
 experiments: setup ## List every experiment and its scores
 	@$(PYTHON) -m titanic_agent.experiments

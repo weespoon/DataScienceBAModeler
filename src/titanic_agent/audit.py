@@ -15,6 +15,11 @@ prevention was bypassed and every score is suspect.
 holdout read with no receipt, more than one receipt per frozen dataset. These
 are things nobody has to be honest about: the evidence is mechanical.
 
+**Structural** — Rule 4. Titanic's real manifest is public, and our own final
+test is drawn from those passengers, so a lookup would inflate the number this
+programme is built around while every other check stayed green. See
+:mod:`titanic_agent.leakage`.
+
 **Attested** — Rule 2. Whether ``holdout_read`` was signed truthfully cannot be
 mechanically verified, because a stray read of the holdout in a step with no
 business reading it leaves no trace (file access times are unreliable on APFS).
@@ -160,6 +165,18 @@ def audit(
             ),
         )
     )
+
+    # ---- Rule 4: no looking up the answers --------------------------------- #
+    from . import leakage
+
+    for guard in leakage.check_all(log_path=log_path, frozen_dir=frozen_dir):
+        checks.append(
+            Check(
+                f"rule 4 · {guard.name}",
+                guard.passed,
+                guard.detail + ("" if guard.passed else f" — {guard.offenders[:3]}"),
+            )
+        )
 
     # ---- Provenance -------------------------------------------------------- #
     if not frame.empty:
