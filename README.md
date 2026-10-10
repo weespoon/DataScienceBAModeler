@@ -39,9 +39,11 @@ These are the point of the repo. They are the constraints that make an
 autonomous run trustworthy, and they live in [CLAUDE.md](CLAUDE.md):
 
 1. **The frozen dataset is immutable.** After `freeze`, nothing in
-   `data/frozen/` is ever modified. Files are chmod 0444 and checksummed in
-   `MANIFEST.json`; every later step verifies them before it runs. `freeze()`
-   has no `force` flag.
+   `data/frozen/` is ever modified. Files are checksummed in `MANIFEST.json`,
+   every later step verifies them before it runs, and `freeze()` has no `force`
+   flag. `chmod 0444` is not the enforcement — it does not stop the file's
+   owner — so a `PreToolUse` hook denies the agent any write under
+   `data/frozen/` once a manifest exists. Unfreezing is a human action.
 2. **The holdout is read once, at the end.** Model selection happens entirely
    by cross-validation on the training split. Only `ensemble` may read
    `holdout.csv`, only explicitly, and the number it gets is a report — never a
@@ -79,10 +81,13 @@ CPU in seconds.
 ```
 ├── CLAUDE.md               # operating rules for the agent
 ├── Makefile                # one target per pipeline step
+├── docs/UNFREEZING.md      # human-only procedure, deliberately not agent-facing
 ├── .claude/skills/         # one SKILL.md per step: inputs, outputs, done criteria
+├── .claude/hooks/          # PreToolUse hook enforcing rule 1 in the harness
 ├── data/raw/               # gitignored -- raw download
 ├── data/frozen/            # gitignored -- immutable after `freeze`
 ├── experiments/results.csv # append-only experiment ledger
+├── experiments/holdout_reads.json  # one receipt per holdout read (rule 2)
 ├── reports/                # generated charts and markdown summaries (committed)
 ├── src/titanic_agent/      # one module per step, plus paths.py and results_log.py
 └── tests/                  # a smoke test per module

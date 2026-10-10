@@ -74,8 +74,8 @@ test: setup ## Run the smoke tests
 	$(BIN)/pytest
 
 lint: setup ## Lint and format-check with ruff
-	$(BIN)/ruff check src tests
-	$(BIN)/ruff format --check src tests
+	$(BIN)/ruff check src tests .claude/hooks
+	$(BIN)/ruff format --check src tests .claude/hooks
 
 log: setup ## Print the experiment ledger
 	$(PYTHON) -m titanic_agent.results_log

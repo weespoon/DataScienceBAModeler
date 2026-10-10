@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/protect_frozen.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking Rule 1 (data/frozen immutability)"
+          }
+        ]
+      }
+    ]
+  }
+}

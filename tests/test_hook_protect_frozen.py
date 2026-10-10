@@ -1,0 +1,161 @@
+"""Smoke test: the PreToolUse hook that enforces Rule 1 in the harness.
+
+The hook lives outside the package (``.claude/hooks/``) because the harness runs
+it as a standalone script, so it is loaded here by path. Its policy is a pure
+function, :func:`decide`, which is why these tests need no frozen dataset on
+disk — and why the hook has no environment-variable override, which would itself
+be a documented way around the thing it enforces.
+
+Two properties matter most:
+
+- :func:`test_the_initial_freeze_is_allowed_through` — a deny that also blocks
+  ``freeze`` would make the pipeline unrunnable. This is the whole design
+  question: how the authorized writer passes a blanket deny.
+- :func:`test_bash_heuristic_is_known_to_be_evadable` — documents the leak
+  rather than pretending it is closed. Prevention is partial; detection and
+  attestation cover the rest.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+
+import pytest
+
+from titanic_agent import paths
+
+HOOK_PATH = paths.ROOT / ".claude" / "hooks" / "protect_frozen.py"
+
+
+def _load_hook():
+    spec = importlib.util.spec_from_file_location("protect_frozen", HOOK_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+hook = _load_hook()
+
+
+def write(path: str) -> dict:
+    return {"tool_name": "Write", "tool_input": {"file_path": path}}
+
+
+def bash(command: str) -> dict:
+    return {"tool_name": "Bash", "tool_input": {"command": command}}
+
+
+def test_the_hook_exists_and_is_executable() -> None:
+    assert HOOK_PATH.is_file()
+    assert HOOK_PATH.stat().st_mode & 0o111, "hook must be executable"
+
+
+def test_the_initial_freeze_is_allowed_through() -> None:
+    # Before a manifest exists, freeze() must be able to write these files.
+    # A hook that denied this would make the pipeline unrunnable.
+    for payload in (
+        write("data/frozen/train.csv"),
+        write("data/frozen/holdout.csv"),
+        write("data/frozen/MANIFEST.json"),
+        bash("chmod 0444 data/frozen/train.csv"),
+    ):
+        assert hook.decide(payload, is_frozen=False) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "data/frozen/train.csv",
+        "data/frozen/holdout.csv",
+        "data/frozen/MANIFEST.json",
+        "data/frozen/nested/deeper.csv",
+        "src/../data/frozen/sneaky.csv",
+        "./data/frozen/train.csv",
+    ],
+)
+def test_writes_into_frozen_are_denied_once_frozen(path: str) -> None:
+    assert hook.decide(write(path), is_frozen=True) is not None
+
+
+def test_absolute_paths_are_denied_too() -> None:
+    absolute = str(paths.FROZEN_DIR / "train.csv")
+    assert hook.decide(write(absolute), is_frozen=True) is not None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "data/raw/train.csv",
+        "experiments/results.csv",
+        "experiments/holdout_reads.json",
+        "reports/02_explore.md",
+        "src/titanic_agent/tune.py",
+        "data/frozen_notes.md",  # adjacent name, not inside the directory
+    ],
+)
+def test_writes_elsewhere_are_untouched(path: str) -> None:
+    assert hook.decide(write(path), is_frozen=True) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf data/frozen/*",
+        "chmod -R u+w data/frozen",
+        "echo x > data/frozen/train.csv",
+        "cat junk >> data/frozen/holdout.csv",
+        "mv data/frozen/train.csv /tmp/",
+        "cp /tmp/x.csv data/frozen/train.csv",
+        "truncate -s 0 data/frozen/train.csv",
+        "touch data/frozen/marker",
+        "sed -i '' s/a/b/ data/frozen/train.csv",
+    ],
+)
+def test_mutating_bash_against_frozen_is_denied(command: str) -> None:
+    assert hook.decide(bash(command), is_frozen=True) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat data/frozen/MANIFEST.json",
+        "shasum -a 256 data/frozen/train.csv",
+        "head -5 data/frozen/train.csv",
+        "ls -la data/frozen",
+        "make verify",
+        "wc -l data/frozen/train.csv",
+    ],
+)
+def test_reading_frozen_from_bash_is_allowed(command: str) -> None:
+    # Reading train.csv is legitimate. Reading holdout.csv is a Rule 2 matter,
+    # which this hook deliberately does not police -- see receipts.py for why
+    # that one is handled by attestation instead.
+    assert hook.decide(bash(command), is_frozen=True) is None
+
+
+def test_mutating_bash_elsewhere_is_allowed() -> None:
+    assert hook.decide(bash("rm -rf .pytest_cache"), is_frozen=True) is None
+    assert hook.decide(bash("echo hi > reports/notes.md"), is_frozen=True) is None
+
+
+def test_unknown_tools_are_not_blocked() -> None:
+    assert hook.decide({"tool_name": "Read", "tool_input": {}}, is_frozen=True) is None
+    assert hook.decide({}, is_frozen=True) is None
+
+
+def test_bash_heuristic_is_known_to_be_evadable() -> None:
+    # Documented, not fixed. Bash gives the hook a command string rather than a
+    # structured target, so a caller that does not spell the path can get past
+    # it. This is why Rule 1 also has checksums (detect) and why Rule 2 relies
+    # on attestation: prevention is the strongest guarantee but never complete.
+    evasion = bash('python3 -c "import pathlib;pathlib.Path(chr(100)+chr(47)).write_text(1)"')
+    assert hook.decide(evasion, is_frozen=True) is None
+
+
+def test_decide_is_pure_and_takes_no_env_override() -> None:
+    import inspect
+
+    source = HOOK_PATH.read_text(encoding="utf-8")
+    assert "os.environ" not in source, "an env override would be a way around the hook"
+    assert set(inspect.signature(hook.decide).parameters) == {"payload", "is_frozen", "root"}
