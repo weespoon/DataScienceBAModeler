@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "titanic-agent"
+version = "0.1.0"
+description = "An agent-run data science pipeline for the Kaggle Titanic competition."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Eric Witherspoon" }]
+keywords = ["agentic-ai", "claude-code", "kaggle", "titanic", "scikit-learn"]
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+# Deliberately small. Everything here must train in seconds on a laptop CPU.
+dependencies = [
+  "pandas>=2.1",
+  "numpy>=1.26",
+  "scikit-learn>=1.4",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+# `kaggle` is the one justified addition beyond the four core libraries: it is
+# the only supported way to download competition data, and it is needed by
+# `pull` alone. Every other step runs without it, so it stays an extra --
+# drop the CSVs into data/raw/ by hand and the rest of the pipeline works.
+kaggle = ["kaggle>=1.6"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.urls]
+Repository = "https://github.com/eric-edvisorly/DataScienceBAModeler"
+
+[project.scripts]
+titanic-pull = "titanic_agent.pull:main"
+titanic-review = "titanic_agent.review:main"
+titanic-split = "titanic_agent.split:main"
+titanic-freeze = "titanic_agent.freeze:main"
+titanic-explore = "titanic_agent.explore:main"
+titanic-tune = "titanic_agent.tune:main"
+titanic-ensemble = "titanic_agent.ensemble:main"
+titanic-log = "titanic_agent.results_log:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# The fixture table is one CSV row per line on purpose — reflowing it makes the
+# miniature dataset much harder to read as a table.
+"tests/conftest.py" = ["E501"]

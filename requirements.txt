@@ -1,0 +1,9 @@
+# Mirror of [project.dependencies] in pyproject.toml, for `pip install -r`.
+# Prefer `make setup` (which installs the package itself in editable mode).
+pandas>=2.1
+numpy>=1.26
+scikit-learn>=1.4
+matplotlib>=3.8
+
+# Optional: only `titanic_agent.pull` needs this. See pyproject.toml for why.
+# kaggle>=1.6
