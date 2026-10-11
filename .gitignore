@@ -99,6 +99,9 @@ ipython_config.py
 # byte-identical PNGs, and reports/ already holds the latest copy of each.
 runs/**/*.png
 runs/**/submission.csv
+# In-memory hand-off from `make bakeoff` to `make bakeoff-decide`: a cache,
+# not evidence -- every number in it is also in the ledger.
+runs/**/bakeoff.pickle
 
 # Redaction term list: naming what is hidden would publish it
 scripts/redact_terms.txt

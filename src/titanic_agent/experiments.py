@@ -429,7 +429,7 @@ def evaluate(
             experiment.
     """
     from . import ensemble as ensemble_module
-    from . import results_log, run_log
+    from . import results_log
     from . import tune as tune_module
 
     experiment = load_experiment(experiment_id or _require_current().experiment_id)
@@ -459,9 +459,23 @@ def evaluate(
             )
         best = declared.iloc[0]
     train, val = load_frames(experiment, frozen_dir=frozen_dir)
-    features = tune_module.resolve_features(train, (best["params"] or {}).get("features"))
-
     model_name = str(best["model"])
+    params = best["params"] or {}
+    if str(best["step"]) == "bakeoff":
+        # A bake-off arm carries fitted transforms (some read the label), so it
+        # is rebuilt whole from its logged config and fitted on the full frame:
+        # its Engineer step learns from the training rows only, never from val.
+        from . import bakeoff
+
+        estimator = bakeoff.build(params["config"], seed=experiment.seed)
+        features = list(params["config"]["features"])
+        estimator.fit(bakeoff.design(train), train["Survived"])
+        score = float(estimator.score(bakeoff.design(val), val["Survived"]))
+        return _record_evaluation(
+            experiment, best, run_id, model_name, features, score, len(val), log_path
+        )
+
+    features = tune_module.resolve_features(train, params.get("features"))
     if model_name in tune_module.MODEL_KEYS:
         estimator = tune_module.build_pipeline(model_name, seed=experiment.seed)
         tunable = {k: v for k, v in (best["params"] or {}).items() if k.startswith("clf__")}
@@ -482,17 +496,34 @@ def evaluate(
 
     estimator.fit(train[features], train["Survived"])
     score = float(estimator.score(val[features], val["Survived"]))
+    return _record_evaluation(
+        experiment, best, run_id, model_name, features, score, len(val), log_path
+    )
+
+
+def _record_evaluation(
+    experiment: Experiment,
+    best,
+    run_id: str | None,
+    model_name: str,
+    features: list[str],
+    score: float,
+    val_rows: int,
+    log_path: Path,
+) -> Experiment:
+    """Ledger row, read receipt, journal line and manifest update for one val read."""
+    from . import results_log, run_log
 
     run_id = results_log.append_run(
         step="evaluate",
         model=model_name,
-        params={"features": features, "val_rows": len(val)},
+        params={"features": features, "val_rows": val_rows},
         cv_score=score,
         cv_folds=None,
         seed=experiment.seed,
         holdout_read=False,  # the FINAL test is untouched; this is the val split
         notes=(
-            f"validation score for {experiment.experiment_id} on {len(val)} held-back rows; "
+            f"validation score for {experiment.experiment_id} on {val_rows} held-back rows; "
             + (f"pre-declared row {run_id}, " if run_id else "")
             + f"its cv was {float(best['cv_score']):.4f}"
         ),
@@ -508,7 +539,7 @@ def evaluate(
         "decision",
         step="evaluate",
         detail=(
-            f"{experiment.experiment_id} validation: {score:.4f} on {len(val)} rows "
+            f"{experiment.experiment_id} validation: {score:.4f} on {val_rows} rows "
             f"({model_name}); cv was {float(best['cv_score']):.4f}"
         ),
     )
@@ -635,6 +666,35 @@ def _comparison_counts(log_path: Path | None = None) -> dict[str, int]:
     return counts
 
 
+def _champion_deltas(log_path: Path | None = None) -> dict[str, tuple[str, float, float]]:
+    """Each experiment's best paired delta over the champion: ``(arm, delta, sigma)``.
+
+    This is the cross-experiment column. Absolute cv drifts 0.004-0.011 between
+    experiments because each re-draws its split; a delta against a champion
+    re-scored on the same folds does not carry that drift.
+    """
+    from . import results_log
+
+    try:
+        frame = results_log.read_log(log_path)
+    except Exception:
+        return {}
+    if frame.empty or "experiment_id" not in frame:
+        return {}
+    best: dict[str, tuple[str, float, float]] = {}
+    for _, row in frame.iterrows():
+        params = row["params"]
+        if not isinstance(params, dict) or "delta_vs_champion" not in params:
+            continue
+        if params.get("arm") == "champion":
+            continue
+        experiment_id = str(row["experiment_id"])
+        delta = float(params["delta_vs_champion"])
+        if experiment_id not in best or delta > best[experiment_id][1]:
+            best[experiment_id] = (str(params.get("arm")), delta, float(params.get("sigma", 0)))
+    return best
+
+
 def write_index(path: Path | None = None) -> Path:
     """Rewrite ``EXPERIMENTS.md`` — one row per experiment, newest last.
 
@@ -644,6 +704,7 @@ def write_index(path: Path | None = None) -> Path:
     found = list_experiments()
 
     searched = _comparison_counts()
+    versus = _champion_deltas()
     val_rows = max((len(e.val_ids) for e in found), default=143)
 
     def noise_band(score: float, rows: int) -> float:
@@ -673,8 +734,14 @@ def write_index(path: Path | None = None) -> Path:
         "Comparisons belong in `compare.py`.",
         "Neither number is the final test, which is read once for the whole programme.",
         "",
-        "| experiment | status | train/val | best cv | val | gap | summary |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "**`Δ champion` is the column to compare across experiments.** Each experiment",
+        "re-scores the persisted champion (`make champion`) on its own folds, so the",
+        "delta is paired and carries none of the 0.004-0.011 split drift that makes",
+        "`best cv` incomparable between rows. It is the best arm's delta, so it is a",
+        "best-of-N and biased upward by the search; the experiment's report says by how much.",
+        "",
+        "| experiment | status | train/val | best cv | Δ champion | val | gap | summary |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for experiment in found:
         cv = "—" if experiment.best_cv is None else f"{experiment.best_cv:.4f}"
@@ -689,13 +756,18 @@ def write_index(path: Path | None = None) -> Path:
             band = noise_band(experiment.val_score, len(experiment.val_ids))
             marker = "" if abs(difference) >= band else " (within noise)"
             gap = f"{difference:+.4f} ±{band:.3f}{marker}"
+        if experiment.experiment_id in versus:
+            arm, delta, sigma = versus[experiment.experiment_id]
+            versus_cell = f"{delta:+.4f} ({sigma:+.1f}σ) <br><sub>{arm}</sub>"
+        else:
+            versus_cell = "—"
         lines.append(
             f"| `{experiment.experiment_id}` | {experiment.status} | "
-            f"{len(experiment.train_ids)}/{len(experiment.val_ids)} | {cv} | {val} | "
-            f"{gap} | {experiment.summary or ''} |"
+            f"{len(experiment.train_ids)}/{len(experiment.val_ids)} | {cv} | {versus_cell} | "
+            f"{val} | {gap} | {experiment.summary or ''} |"
         )
     if not found:
-        lines.append("| _none yet_ | | | | | | |")
+        lines.append("| _none yet_ | | | | | | | |")
 
     lines += [
         "",

@@ -2,3 +2,4 @@
 {"experiment_id": "exp-003-wider-search", "model": "svc", "run_id": "20261010T192841-8ce38f", "score": 0.846154, "timestamp_utc": "2026-10-10T19:28:41+00:00"}
 {"experiment_id": "exp-004-hgb-regularisation", "model": "random_forest", "run_id": "20261010T194625-226d5d", "score": 0.867133, "timestamp_utc": "2026-10-10T19:46:26+00:00"}
 {"experiment_id": "exp-006-feature-selection", "model": "random_forest", "run_id": "20261010T203704-9773c4", "score": 0.811189, "timestamp_utc": "2026-10-10T20:37:04+00:00"}
+{"experiment_id": "exp-007-bakeoff", "model": "random_forest", "run_id": "20261011T192034-80371b", "score": 0.853147, "timestamp_utc": "2026-10-11T19:20:34+00:00"}

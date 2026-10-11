@@ -66,6 +66,11 @@ VAL_READS: Path = EXPERIMENTS_DIR / "val_reads.jsonl"
 #: it. See :func:`titanic_agent.results_log.verify_chain`.
 CHAIN_EPOCHS: Path = EXPERIMENTS_DIR / "chain_epochs.jsonl"
 
+#: Append-only succession of champions: the one configuration every experiment
+#: re-scores on its own folds, so what crosses experiments is a paired delta
+#: rather than an absolute CV. Global for the same reason the ledger is.
+CHAMPION: Path = EXPERIMENTS_DIR / "champion.jsonl"
+
 #: Default random seed. Change it only with a recorded reason — the split that
 #: produced the frozen holdout is reproducible from this value plus MANIFEST.json.
 SEED: int = 20251010
@@ -88,6 +93,7 @@ WRITABLE_ARTIFACTS: tuple[str, ...] = (
     "EXPERIMENTS_INDEX",
     "CHAIN_EPOCHS",
     "VAL_READS",
+    "CHAMPION",
     "RUNS_DIR",
     "REPORTS_DIR",
 )

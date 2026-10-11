@@ -97,10 +97,14 @@ def derivable_columns(frozen_dir: Path = paths.FROZEN_DIR) -> set[str]:
     """
     import pandas as pd
 
-    from . import tune
+    from . import bakeoff, tune
 
     working = pd.read_csv(Path(frozen_dir) / "train.csv", nrows=5)
-    return set(tune.add_derived(working).columns)
+    # Columns the bake-off's in-fold transforms produce. Declared in code, built
+    # from frozen columns inside each fold; a join would still have to pass
+    # check_external_reads to reach them.
+    fitted = {column for outputs in bakeoff.FITTED_OUTPUTS.values() for column in outputs}
+    return set(tune.add_derived(working).columns) | fitted
 
 
 def check_feature_provenance(
@@ -176,6 +180,7 @@ METRIC_BY_STEP: dict[str, str] = {
     "features": "cv",
     "ensemble": "cv",
     "nested": "cv",
+    "bakeoff": "cv",
     "evaluate": "val",
 }
 

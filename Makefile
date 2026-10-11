@@ -21,7 +21,7 @@ OUTER_FOLDS ?= 5
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune features ensemble \
-	nested test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
+	nested bakeoff bakeoff-decide champion test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -77,6 +77,20 @@ features: setup ## Greedy add/prune feature selection vs one fixed model (needs 
 # Deliberately absent from `make loop` -- once per searching experiment.
 nested: setup ## Measure a feature search's selection bias. Options: EXPERIMENT=<id> OUTER_FOLDS=5
 	$(PYTHON) -m titanic_agent.nested $(if $(EXPERIMENT),--experiment $(EXPERIMENT),) --outer-folds $(OUTER_FOLDS)
+
+# The search half of a bake-off: every arm paired against the champion, plus
+# the winner re-scored on fresh fold seeds. Inside the ~2-minute rule.
+ONLY ?=
+bakeoff: setup ## Many arms vs the persisted champion (needs an open experiment). Options: ONLY=a,b
+	$(PYTHON) -m titanic_agent.bakeoff run $(if $(ONLY),--only $(ONLY),)
+
+# The measurement half: nested CV of pick-the-best, then the pre-declared rule.
+# Over the 2-minute rule for the same reason `nested` is; once per bake-off.
+bakeoff-decide: setup ## Nested-CV the bake-off, apply its declared rule, crown or hold
+	$(PYTHON) -m titanic_agent.bakeoff decide $(if $(ONLY),--only $(ONLY),)
+
+champion: setup ## The persisted champion every experiment is paired against
+	@$(PYTHON) -m titanic_agent.champion
 
 ensemble: setup ## Step 7: combine the best models -> reports/submission.csv
 	$(PYTHON) -m titanic_agent.ensemble --method $(METHOD) --top-k $(TOP_K) --cv-folds $(CV_FOLDS)

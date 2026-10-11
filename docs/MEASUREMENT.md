@@ -314,8 +314,22 @@ The fix is a **persisted champion**: each experiment re-scores the inherited
 champion configuration on *its own* folds, paired, and records
 `delta_vs_champion` rather than an absolute CV. `features.py` already does
 exactly this internally — `base_run_id`, both arms on identical folds — so what
-is missing is carrying it across the experiment boundary. That is a change to
-the experiment protocol and is **not** implemented; it is the top open item.
+is missing is carrying it across the experiment boundary.
+
+**Implemented in exp-007** (`champion.py`, `make champion`). The succession
+lives in `experiments/champion.jsonl` — global and append-only, for the same
+reason the ledger is. `bakeoff.py` re-scores the champion as arm zero on the
+experiment's own folds, and every row carries `delta_vs_champion` with its
+sigma. `EXPERIMENTS.md` now has a `Δ champion` column, which is the one to read
+across rows.
+
+The drift it removes was visible immediately. The same RF configuration scored
+0.8360 on exp-006's folds and **0.8131** on exp-007's: a 0.023 swing from the
+split alone, larger than every effect in exp-007 except the group features.
+What it does not remove is that two experiments' deltas are still estimated on
+different rows, so they carry the paired SE (~0.003-0.005), not zero. And a
+`Δ champion` reported for the *best* arm is a best-of-N; exp-007's dropped from
++0.0264 to +0.0163 on fresh fold seeds.
 
 ---
 
