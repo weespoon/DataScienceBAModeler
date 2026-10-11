@@ -302,13 +302,18 @@ def _repo_artifacts_unchanged() -> Iterator[None]:
         real_paths.ROOT / "reports",
     )
 
+    # Editor swap and backup files. A human reading an experiment in vim while
+    # the suite runs creates one, and no test ever writes one -- flagging it
+    # failed a green suite during exp-007's follow-ups.
+    editor_droppings = (".swp", ".swo", "~")
+
     def snapshot() -> dict[str, float]:
         seen: dict[str, float] = {}
         for root in watched:
             if not root.exists():
                 continue
             for item in root.rglob("*"):
-                if item.is_file():
+                if item.is_file() and not item.name.endswith(editor_droppings):
                     seen[str(item)] = item.stat().st_mtime
         return seen
 
