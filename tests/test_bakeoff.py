@@ -244,3 +244,97 @@ def test_evaluate_rebuilds_a_bakeoff_row(sandbox: Path, frozen_dir: Path, log_pa
     )
     assert updated.val_score is not None
     assert 0.0 <= updated.val_score <= 1.0
+
+
+# --------------------------------------------------------------------------- #
+# decomposition, replication, submission (the exp-007 follow-ups)
+# --------------------------------------------------------------------------- #
+
+
+def _kitchen() -> dict:
+    registry = bakeoff.arms_for(champion.INITIAL)
+    return registry["rf_kitchen"].config(registry)
+
+
+def test_decompose_undoes_each_change_once() -> None:
+    arms = bakeoff.decompose_arms(_kitchen(), champion.INITIAL)
+    assert list(arms)[:4] == ["champion", "previous_champion", "rf_wcg", "rf_wcg_maxfeat"]
+    without = {name.removeprefix("without_") for name in arms if name.startswith("without_")}
+    assert without == set(bakeoff.COMPONENTS)
+
+    wcg_gone = arms["without_wcg_rate"]
+    assert not set(bakeoff.WCG) & set(wcg_gone.features)
+    assert "group" in wcg_gone.engineer  # the all-member rate still needs it
+    assert "clf__max_features" not in arms["without_max_features"].params
+    assert "Title" in arms["without_titlefine_swap"].features
+
+
+def test_decompose_skips_changes_the_champion_does_not_carry() -> None:
+    arms = bakeoff.decompose_arms(champion.INITIAL)
+    assert list(arms) == ["champion"]
+
+
+def test_dropping_the_last_group_column_drops_the_group_step() -> None:
+    config = {"features": ["Sex", "WCGSurvival", "WCGKnown"], "engineer": ["group"]}
+    assert bakeoff._without(config, bakeoff.WCG)["engineer"] == []
+
+
+def test_replication_pairs_configs_across_experiments(log_path: Path) -> None:
+    ref = {"name": "champion", "model": "m", "params": {}, "features": ["Sex"]}
+    arm = {"name": "x", "model": "m", "params": {"p": 1}, "features": ["Sex"]}
+    new_ref = {"name": "new", "model": "n", "params": {}, "features": ["Sex"]}
+
+    def log(experiment_id, name, config, delta):
+        results_log.append_run(
+            step="bakeoff",
+            model="m",
+            params={"arm": name, "config": config, "delta_vs_champion": delta},
+            cv_score=0.8,
+            experiment_id=experiment_id,
+            path=log_path,
+        )
+
+    log("exp-a", "champion", ref, 0.0)
+    log("exp-a", "x", arm, 0.02)
+    # exp-b has a new champion; the old reference is re-run under another name.
+    log("exp-b", "champion", new_ref, 0.0)
+    log("exp-b", "previous_champion", {**ref, "name": "rf_old"}, -0.01)
+    log("exp-b", "x", arm, 0.0)
+
+    [row] = bakeoff.replication("exp-b", log_path=log_path)
+    assert row["arm"] == "x" and row["reference"] == "previous_champion"
+    assert row["delta_there"] == 0.02
+    assert row["delta_here"] == pytest.approx(0.01)
+    assert row["change"] == pytest.approx(-0.01)
+
+
+def test_submit_predicts_the_test_set_without_reading_the_holdout(
+    sandbox: Path, frozen_dir: Path, log_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    champion.ensure()
+    real_read = pd.read_csv
+
+    def guarded(path, *args, **kwargs):
+        assert "holdout" not in str(path), "submit read the holdout"
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_csv", guarded)
+    written = champion.submit(
+        frozen_dir=frozen_dir, log_path=log_path, submission_path=tmp_path / "s.csv"
+    )
+    submission = real_read(written)
+    assert len(submission) == len(real_read(frozen_dir / "test.csv"))
+    assert set(submission["Survived"]) <= {0, 1}
+    row = results_log.read_log(log_path).iloc[-1]
+    assert row["step"] == "submit" and not row["holdout_read"]
+
+
+def test_close_does_not_report_a_val_score_as_best_cv(
+    sandbox: Path, frozen_dir: Path, log_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(paths, "RESULTS_LOG", log_path)
+    exp = experiments.open_experiment("bakeoff", frozen_dir=frozen_dir)
+    results_log.append_run(step="bakeoff", model="m", cv_score=0.80, path=log_path)
+    results_log.append_run(step="evaluate", model="m", cv_score=0.95, path=log_path)
+    closed = experiments.close_experiment(exp.experiment_id)
+    assert closed.best_cv == pytest.approx(0.80)

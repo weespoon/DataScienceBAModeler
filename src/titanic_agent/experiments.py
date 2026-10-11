@@ -577,6 +577,10 @@ def close_experiment(
         else frame.iloc[0:0]
     )
     scored = rows.dropna(subset=["cv_score"]) if len(rows) else rows
+    # The evaluate row shares the cv_score column but holds the *validation*
+    # score. Left in, a val read above cv was journaled as best_cv (exp-007).
+    if len(scored):
+        scored = scored[scored["step"] != "evaluate"]
     best_cv = float(scored["cv_score"].astype(float).max()) if len(scored) else None
 
     closed = _write(

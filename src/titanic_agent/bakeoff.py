@@ -532,6 +532,205 @@ def arms_for(champion_config: dict[str, Any]) -> dict[str, Arm]:
     return {arm.name: arm for arm in listed}
 
 
+def _without(config: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
+    """``config`` minus some features, dropping the ``group`` step if it is now unused."""
+    undone = {**config, "features": [f for f in config["features"] if f not in columns]}
+    if "group" in undone["engineer"] and not set(undone["features"]) & set(GROUP + WCG):
+        undone["engineer"] = [e for e in undone["engineer"] if e != "group"]
+    return undone
+
+
+#: Each change a champion may carry, how to undo it, and why it might matter.
+#: ``undo`` returns None when the champion does not carry the change.
+COMPONENTS: dict[str, tuple[str, Any]] = {
+    "titlefine_swap": (
+        "Title back in place of TitleFine. Tests whether the finer titles earn anything "
+        "once group rates already separate the families that 'Rare' mixed.",
+        lambda c: (
+            {**c, "features": ["Title" if f == "TitleFine" else f for f in c["features"]]}
+            if "TitleFine" in c["features"] and "Title" not in c["features"]
+            else None
+        ),
+    ),
+    "age_by_title": (
+        "Median Age instead of title-median Age. Boys with missing ages may already be "
+        "caught by Title and the WCG rate, which would make the imputation redundant.",
+        lambda c: (
+            {**c, "engineer": [e for e in c["engineer"] if e != "age_by_title"]}
+            if "age_by_title" in c["engineer"]
+            else None
+        ),
+    ),
+    "ticket_size": (
+        "Drop TicketGroupSize. Group rates already know who shares a ticket; the size may "
+        "add nothing to them.",
+        lambda c: (
+            {
+                **_without(c, ("TicketGroupSize",)),
+                "engineer": [e for e in c["engineer"] if e != "ticket_size"],
+            }
+            if "ticket_size" in c["engineer"]
+            else None
+        ),
+    ),
+    "group_rate": (
+        "Drop the all-member group rate, keep WCG. Adult men's fates may be noise the "
+        "WCG rate already filtered out.",
+        lambda c: _without(c, GROUP) if set(GROUP) & set(c["features"]) else None,
+    ),
+    "wcg_rate": (
+        "Drop the WCG rate, keep the all-member rate. The arm that tells us whether WCG "
+        "is the lever or merely one encoding of it.",
+        lambda c: _without(c, WCG) if set(WCG) & set(c["features"]) else None,
+    ),
+    "max_features": (
+        "Default max_features (sqrt) instead of 0.5. exp-007's +0.0100 for 0.5 on the "
+        "baseline features was unconfirmed; this asks whether it survives here.",
+        lambda c: (
+            {
+                **c,
+                "params": {k: v for k, v in c["params"].items() if k != "clf__max_features"},
+            }
+            if "clf__max_features" in c["params"]
+            else None
+        ),
+    ),
+}
+
+
+def decompose_arms(
+    champion_config: dict[str, Any], previous_config: dict[str, Any] | None = None
+) -> dict[str, Arm]:
+    """Take the champion apart: one arm per change it carries, each undone alone.
+
+    Also re-runs, unchanged, the configs a decomposition needs to be read
+    against: the previous champion and exp-007's single-lever ``rf_wcg``. Their
+    configs are identical to the ones exp-007 logged, which is what lets
+    :func:`replication` compare the two experiments' deltas directly.
+    """
+
+    def arm(name: str, hypothesis: str, config: dict[str, Any]) -> Arm:
+        return Arm(
+            name,
+            hypothesis,
+            config["model"],
+            tuple(config["features"]),
+            dict(config.get("params", {})),
+            tuple(config.get("engineer", ())),
+        )
+
+    listed = [arm("champion", "The reigning champion, re-scored as reference.", champion_config)]
+    if previous_config is not None:
+        listed.append(
+            arm(
+                "previous_champion",
+                "The champion this one replaced. Replicates the promotion delta on rows the "
+                "promotion never saw: the config x split interaction, measured.",
+                previous_config,
+            )
+        )
+        earlier = arms_for(previous_config)
+        if "rf_wcg" in earlier:
+            wcg = earlier["rf_wcg"].config(earlier)
+            listed.append(
+                arm(
+                    "rf_wcg",
+                    "exp-007's single-lever arm, unchanged: previous champion + WCG rate. "
+                    "Replicated so its +0.0182 can be checked on new rows.",
+                    wcg,
+                )
+            )
+            listed.append(
+                arm(
+                    "rf_wcg_maxfeat",
+                    "rf_wcg plus max_features 0.5: the guess that these two changes carry "
+                    "all of the champion's gain and the other three are noise.",
+                    {**wcg, "params": {**wcg["params"], "clf__max_features": 0.5}},
+                )
+            )
+    for component, (hypothesis, undo) in COMPONENTS.items():
+        undone = undo(champion_config)
+        if undone is not None:
+            listed.append(arm(f"without_{component}", hypothesis, undone))
+    return {a.name: a for a in listed}
+
+
+#: Arm sets an experiment can run. ``bakeoff`` is exp-007's breadth search;
+#: ``decompose`` takes the reigning champion apart.
+ARM_SETS: tuple[str, ...] = ("bakeoff", "decompose")
+
+
+def registry_for(arm_set: str, champion_path: Path | None = None) -> dict[str, Arm]:
+    """The arms for ``arm_set``, built against the reigning champion."""
+    from . import champion as champion_module
+
+    reigning = champion_module.ensure(champion_path)
+    if arm_set == "bakeoff":
+        return arms_for(reigning.config)
+    if arm_set == "decompose":
+        succession = champion_module.history(champion_path)
+        previous = succession[-2].config if len(succession) > 1 else None
+        return decompose_arms(reigning.config, previous)
+    raise ValueError(f"unknown arm set {arm_set!r}; expected one of {ARM_SETS}")
+
+
+def _comparable(config: dict[str, Any]) -> str:
+    """A config's identity for replication: everything but its display name."""
+    import json
+
+    return json.dumps({k: v for k, v in config.items() if k != "name"}, sort_keys=True)
+
+
+def replication(experiment_id: str, *, log_path: Path | None = None) -> list[dict[str, Any]]:
+    """Re-measure earlier experiments' deltas on this experiment's rows.
+
+    For each earlier experiment whose *reference* config was re-run here, every
+    other config run in both experiments gets two numbers: its delta over that
+    reference there, and the same paired delta here. Both are differences of
+    two arms on one experiment's identical folds, so the comparison carries no
+    split drift — what remains is the config x split interaction plus noise.
+    That is exactly what a cross-experiment claim has to survive.
+    """
+    from . import results_log
+
+    frame = results_log.read_log(log_path)
+    rows = frame[frame["step"] == "bakeoff"].dropna(subset=["cv_score"])
+    by_experiment: dict[str, dict[str, tuple[str, float]]] = {}
+    for _, row in rows.iterrows():
+        params = row["params"]
+        if not isinstance(params, dict) or "config" not in params:
+            continue
+        key = _comparable(params["config"])
+        by_experiment.setdefault(str(row["experiment_id"]), {})[key] = (
+            str(params["arm"]),
+            float(params["delta_vs_champion"]),
+        )
+    here = by_experiment.get(experiment_id, {})
+    found: list[dict[str, Any]] = []
+    for earlier_id, there in by_experiment.items():
+        if earlier_id == experiment_id:
+            continue
+        reference = next((k for k, (name, _) in there.items() if name == "champion"), None)
+        if reference is None or reference not in here:
+            continue
+        for key, (name_there, delta_there) in there.items():
+            if key == reference or key not in here:
+                continue
+            name_here, delta_here = here[key]
+            found.append(
+                {
+                    "earlier": earlier_id,
+                    "reference": here[reference][0],
+                    "arm": name_here,
+                    "arm_there": name_there,
+                    "delta_there": round(delta_there, 6),
+                    "delta_here": round(delta_here - here[reference][1], 6),
+                    "change": round(delta_here - here[reference][1] - delta_there, 6),
+                }
+            )
+    return found
+
+
 def build(config: dict[str, Any], *, seed: int):
     """An unfitted estimator for a logged arm config. Takes the whole frame."""
     from sklearn.ensemble import StackingClassifier, VotingClassifier
@@ -629,6 +828,8 @@ class Bakeoff:
     confirm_run_id: str = ""
     seconds: float = 0.0
     n_rows: int = 0
+    arm_set: str = "bakeoff"
+    replicated: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _require_experiment():
@@ -645,6 +846,7 @@ def _require_experiment():
 
 def run(
     *,
+    arm_set: str = "bakeoff",
     only: list[str] | None = None,
     folds: int = CV_FOLDS,
     repeats: int = CV_REPEATS,
@@ -665,7 +867,7 @@ def run(
     experiment = _require_experiment()
     seed = experiment.seed
     reigning = champion_module.ensure(champion_path)
-    registry = arms_for(reigning.config)
+    registry = registry_for(arm_set, champion_path)
     names = list(registry) if not only else ["champion"] + [n for n in only if n != "champion"]
     frame = tune.load_training_frame(frozen_dir)
     cv_label = f"{folds}x{repeats} repeated stratified"
@@ -675,7 +877,7 @@ def run(
         "decision",
         step="bakeoff",
         detail=(
-            f"{experiment.experiment_id}: {challengers} arms vs champion "
+            f"{experiment.experiment_id}: {challengers} {arm_set} arms vs champion "
             f"{reigning.name}, {cv_label} CV, paired. Declared before scoring: the "
             f"winner is the arm with the largest delta_vs_champion; it replaces the "
             f"champion only if (1) its selection delta >= {DELTA}, (2) its delta on "
@@ -686,7 +888,7 @@ def run(
     )
 
     started = time.perf_counter()
-    bake = Bakeoff(experiment.experiment_id, reigning.name, n_rows=len(frame))
+    bake = Bakeoff(experiment.experiment_id, reigning.name, n_rows=len(frame), arm_set=arm_set)
     champion_scores = None
     for number, name in enumerate(names):
         arm = registry[name]
@@ -705,6 +907,7 @@ def run(
             "features": config["features"],
             "cv": cv_label,
             "champion": reigning.name,
+            "arm_set": arm_set,
             "test_number": number,
         }
         if result.error:
@@ -760,6 +963,26 @@ def run(
             run_id=result.run_id,
         )
         bake.results.append(result)
+
+    bake.replicated = replication(experiment.experiment_id, log_path=log_path)
+    if bake.replicated:
+        results_log.append_run(
+            step="bakeoff",
+            model="replication",
+            params={"replication": bake.replicated, "features": []},
+            # Differences of differences, not an accuracy.
+            cv_score=None,
+            cv_folds=folds * repeats,
+            seed=seed,
+            holdout_read=False,
+            notes="bakeoff replication: earlier experiments' paired deltas re-measured here; "
+            + "; ".join(
+                f"{r['arm']} vs {r['reference']}: {r['delta_there']:+.4f} in "
+                f"{r['earlier']} -> {r['delta_here']:+.4f} here"
+                for r in bake.replicated
+            ),
+            path=log_path,
+        )
 
     scored = [r for r in bake.results if r.paired is not None and r.arm.name != "champion"]
     if scored:
@@ -889,6 +1112,7 @@ class NestedBakeoff:
 
 def nested(
     *,
+    arm_set: str = "bakeoff",
     only: list[str] | None = None,
     outer_folds: int = OUTER_FOLDS,
     folds: int = CV_FOLDS,
@@ -907,13 +1131,11 @@ def nested(
     """
     from sklearn.model_selection import StratifiedKFold
 
-    from . import champion as champion_module
     from . import experiments, results_log, run_log, tune
 
     experiment = _require_experiment()
     seed = experiment.seed
-    reigning = champion_module.ensure(champion_path)
-    registry = arms_for(reigning.config)
+    registry = registry_for(arm_set, champion_path)
     names = list(registry) if not only else ["champion"] + [n for n in only if n != "champion"]
     configs = {name: registry[name].config(registry) for name in names}
     frame = tune.load_training_frame(frozen_dir)
@@ -1029,7 +1251,7 @@ def render_markdown(
     null = best_of_n_null(len(challengers))
     champion_row = next((r for r in bake.results if r.arm.name == "champion"), None)
     lines = [
-        f"# 05 — bake-off ({bake.experiment_id})",
+        f"# 05 — bake-off ({bake.experiment_id}, arm set `{bake.arm_set}`)",
         "",
         f"{len(challengers)} arms, each paired against the champion **{bake.champion_name}** "
         f"on identical {CV_FOLDS}×{CV_REPEATS} repeated stratified folds of "
@@ -1064,6 +1286,23 @@ def render_markdown(
             f"{p.naive_se:.4f} | {p.sigma:+.2f} | {p.passengers:+.1f} | {r.seconds:.0f} | "
             f"{r.arm.hypothesis} |"
         )
+    if bake.replicated:
+        lines += [
+            "",
+            "## Replication: earlier deltas, re-measured on these rows",
+            "",
+            "Each row is one paired difference measured twice, in two experiments, on "
+            "different training rows. Split drift cancels inside each; what is left is "
+            "noise (paired SE ~0.003-0.008) plus the config × split interaction.",
+            "",
+            "| arm | vs | earlier | Δ there | Δ here | change |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        ]
+        for r in bake.replicated:
+            lines.append(
+                f"| `{r['arm']}` | `{r['reference']}` | {r['earlier']} | "
+                f"{r['delta_there']:+.4f} | {r['delta_here']:+.4f} | {r['change']:+.4f} |"
+            )
     lines += ["", "## Winner and confirmation", ""]
     if bake.winner and bake.confirm is not None:
         lines += [
@@ -1121,16 +1360,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", nargs="?", default="run", choices=("run", "decide", "list"))
     parser.add_argument("--only", default="", help="comma-separated arm names")
+    parser.add_argument("--set", dest="arm_set", default="bakeoff", choices=ARM_SETS)
     args = parser.parse_args(argv)
     only = [n for n in args.only.split(",") if n] or None
 
     if args.command == "list":
         from . import champion as champion_module
 
-        reigning = champion_module.current() or champion_module.Champion(
-            config=champion_module.INITIAL
+        # Listing must not crown anything, so with no champion yet it shows the
+        # arms the first bake-off would build rather than calling ensure().
+        registry = (
+            arms_for(champion_module.INITIAL)
+            if champion_module.current() is None
+            else registry_for(args.arm_set)
         )
-        for name, arm in arms_for(reigning.config).items():
+        for name, arm in registry.items():
             print(f"  {name:<18} {arm.model:<24} {arm.hypothesis}")
         return 0
 
@@ -1139,7 +1383,7 @@ def main(argv: list[str] | None = None) -> int:
     directory = runs.run_dir(run_log.current_pass_id())
     try:
         if args.command == "run":
-            bake = run(only=only)
+            bake = run(arm_set=args.arm_set, only=only)
             # Hands the in-memory result to `decide`. A cache, not evidence:
             # every number in it is also in the ledger.
             (directory / "bakeoff.pickle").write_bytes(pickle.dumps(bake))
@@ -1150,7 +1394,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("bakeoff decide: no bake-off for the open experiment; run `make bakeoff`")
                 return 1
             directory = runs.run_dir(_latest_state_dir())
-            nested_result = nested(only=only)
+            nested_result = nested(arm_set=bake.arm_set, only=only)
             decision = decide(bake, nested_result)
             report = render_markdown(bake, nested_result, decision)
             _apply(bake, nested_result, decision)
@@ -1206,7 +1450,7 @@ def _apply(bake: Bakeoff, nested_result: NestedBakeoff, decision: Decision) -> N
     if not decision.promote:
         return
     winner = next(r for r in bake.results if r.arm.name == bake.winner)
-    registry = arms_for(champion_module.current().config)
+    registry = registry_for(bake.arm_set)
     champion_module.crown(
         winner.arm.config(registry),
         reason=f"won {bake.experiment_id} bake-off: " + "; ".join(decision.reasons),

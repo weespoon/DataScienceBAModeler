@@ -21,7 +21,7 @@ OUTER_FOLDS ?= 5
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune features ensemble \
-	nested bakeoff bakeoff-decide champion test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
+	nested bakeoff bakeoff-decide champion submit test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -81,8 +81,9 @@ nested: setup ## Measure a feature search's selection bias. Options: EXPERIMENT=
 # The search half of a bake-off: every arm paired against the champion, plus
 # the winner re-scored on fresh fold seeds. Inside the ~2-minute rule.
 ONLY ?=
-bakeoff: setup ## Many arms vs the persisted champion (needs an open experiment). Options: ONLY=a,b
-	$(PYTHON) -m titanic_agent.bakeoff run $(if $(ONLY),--only $(ONLY),)
+ARM_SET ?= bakeoff
+bakeoff: setup ## Many arms vs the persisted champion (needs an open experiment). Options: ARM_SET=decompose ONLY=a,b
+	$(PYTHON) -m titanic_agent.bakeoff run --set $(ARM_SET) $(if $(ONLY),--only $(ONLY),)
 
 # The measurement half: nested CV of pick-the-best, then the pre-declared rule.
 # Over the 2-minute rule for the same reason `nested` is; once per bake-off.
@@ -91,6 +92,11 @@ bakeoff-decide: setup ## Nested-CV the bake-off, apply its declared rule, crown 
 
 champion: setup ## The persisted champion every experiment is paired against
 	@$(PYTHON) -m titanic_agent.champion
+
+# Not step 7: no holdout, no ensemble search. The reigning champion, fitted on
+# the 712 working rows, predicting Kaggle's unlabelled test set.
+submit: setup ## Kaggle submission from the reigning champion (never reads the holdout)
+	$(PYTHON) -m titanic_agent.champion submit
 
 ensemble: setup ## Step 7: combine the best models -> reports/submission.csv
 	$(PYTHON) -m titanic_agent.ensemble --method $(METHOD) --top-k $(TOP_K) --cv-folds $(CV_FOLDS)

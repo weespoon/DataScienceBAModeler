@@ -168,8 +168,101 @@ def ensure(path: Path | None = None) -> Champion:
     return crown(INITIAL, reason=INITIAL_REASON, evidence=list(INITIAL_EVIDENCE), path=path)
 
 
+def submit(
+    *,
+    frozen_dir: Path = paths.FROZEN_DIR,
+    log_path: Path | None = None,
+    champion_path: Path | None = None,
+    submission_path: Path | None = None,
+) -> Path:
+    """Fit the reigning champion on the working set and predict Kaggle's test set.
+
+    Reads ``train.csv`` (712 labelled rows) and ``test.csv`` (418 unlabelled).
+    **Never** ``holdout.csv``: the final test is read once, by
+    ``ensemble --score-holdout``, and a submission has no business spending it.
+    So the champion is fitted on 712 rows, not 891, and the 179 holdout
+    passengers contribute no group rates — a test passenger whose only
+    labelled companions are in the holdout gets the unknown rate. That costs a
+    little accuracy on Kaggle and buys an honest final number.
+
+    Group rates for test passengers come from their labelled companions in the
+    working set, through the same in-fold :class:`~titanic_agent.bakeoff.Engineer`
+    every CV score used: a test row is simply an unseen row.
+
+    Raises:
+        RuntimeError: No champion, or the frozen data fails verification.
+    """
+    import pandas as pd
+
+    from . import bakeoff, ensemble, freeze, results_log, run_log, runs, tune
+
+    freeze.require_frozen(frozen_dir)
+    reigning = current(champion_path)
+    if reigning is None:
+        raise RuntimeError("no champion yet -- run a bake-off first")
+    train = tune.add_derived(pd.read_csv(Path(frozen_dir) / "train.csv"))
+    test = tune.add_derived(pd.read_csv(Path(frozen_dir) / "test.csv"))
+
+    estimator = bakeoff.build(reigning.config, seed=paths.SEED)
+    estimator.fit(bakeoff.design(train), train["Survived"])
+    predictions = estimator.predict(test.drop(columns=["Survived"], errors="ignore"))
+
+    target = (
+        Path(submission_path)
+        if submission_path is not None
+        else runs.run_dir(run_log.current_pass_id()) / "submission.csv"
+    )
+    written = ensemble.write_submission(
+        predictions,
+        passenger_ids=test["PassengerId"],
+        submission_path=target,
+        expected_rows=len(test),
+    )
+    if submission_path is None:
+        runs.publish(written)
+    run_id = results_log.append_run(
+        step="submit",
+        model=reigning.name,
+        params={
+            "config": reigning.config,
+            "features": reigning.config.get("features", []),
+            "train_rows": len(train),
+            "test_rows": len(test),
+            "predicted_survival_rate": round(float(pd.Series(predictions).mean()), 4),
+        },
+        # A submission is not a measurement: Kaggle's labels are not ours.
+        cv_score=None,
+        seed=paths.SEED,
+        holdout_read=False,  # attested: train.csv and test.csv only
+        notes=(
+            f"submission from champion {reigning.name} ({reigning.experiment_id or 'seed'}), "
+            f"fitted on {len(train)} working rows; holdout untouched; {written}"
+        ),
+        path=log_path,
+    )
+    run_log.record(
+        "step_finished",
+        step="submit",
+        detail=f"{len(test)} predictions from {reigning.name} -> {written}",
+        run_id=run_id,
+    )
+    return written
+
+
 def main(argv: list[str] | None = None) -> int:
-    """``make champion``: the succession, newest last."""
+    """``make champion`` (the succession) and ``make submit``."""
+    import sys
+
+    args = sys.argv[1:] if argv is None else argv
+    if args[:1] == ["submit"]:
+        try:
+            written = submit()
+        except RuntimeError as exc:
+            print(f"submit failed: {exc}")
+            return 1
+        print(f"submission written: {written} (holdout untouched)")
+        return 0
+
     found = history()
     if not found:
         print("no champion yet -- the first bakeoff crowns the exp-006 baseline RF")
