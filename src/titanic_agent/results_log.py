@@ -95,6 +95,21 @@ def _run_git(*args: str) -> str | None:
     return out.stdout
 
 
+#: What "the code" means for the ``-dirty`` flag. It used to be the whole tree,
+#: which includes the ledger, the journal and every experiment.json -- tracked
+#: files the pipeline itself appends to. Opening an experiment dirtied the tree
+#: before its first row was written, so every row carried -dirty however clean
+#: the code was (exp-008: 14 of 14 rows on committed bbef8fc). A flag that can
+#: never be off says nothing. Code is what a score must be tied to.
+CODE_PATHS: tuple[str, ...] = (
+    "src",
+    "pyproject.toml",
+    "uv.lock",
+    "requirements.txt",
+    "Makefile",
+)
+
+
 def _git_sha(short: bool = True) -> str:
     """Return the current git commit SHA, or ``"unknown"`` outside a repo.
 
@@ -109,7 +124,7 @@ def _git_sha(short: bool = True) -> str:
     sha = raw.strip()
     if not sha:
         return "unknown"
-    status = _run_git("status", "--porcelain")
+    status = _run_git("status", "--porcelain", "--", *CODE_PATHS)
     if status is None:
         return sha
     return f"{sha}-dirty" if status.strip() else sha

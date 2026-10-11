@@ -77,3 +77,30 @@ def test_best_run_is_none_when_nothing_is_scored(log_path: Path) -> None:
 def test_notes_stay_on_one_csv_line(log_path: Path) -> None:
     results_log.append_run(step="tune", model="a", notes="line one\nline two", path=log_path)
     assert log_path.read_text(encoding="utf-8").count("\n") == 2
+
+
+def test_dirty_flag_tracks_code_not_the_artifacts_the_pipeline_writes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import subprocess
+
+    from titanic_agent import paths
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "m.py").write_text("x = 1\n")
+    (tmp_path / "experiments").mkdir()
+    (tmp_path / "experiments" / "results.csv").write_text("a\n")
+    git("init", "-q")
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    monkeypatch.setattr(paths, "ROOT", tmp_path)
+
+    # Appending to the ledger is the pipeline working, not uncommitted code.
+    (tmp_path / "experiments" / "results.csv").write_text("a\nb\n")
+    assert not results_log._git_sha().endswith("-dirty")
+
+    (tmp_path / "src" / "m.py").write_text("x = 2\n")
+    assert results_log._git_sha().endswith("-dirty")
