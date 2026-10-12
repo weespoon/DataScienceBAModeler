@@ -186,6 +186,46 @@ def audit(
             )
         )
 
+    # ---- Locked predictions: did the plan move after scoring? -------------- #
+    # The only thing separating a scored prediction from one written once the
+    # answer was known is the hash journaled before any arm ran. Until now that
+    # was re-checked only by a sentence in result.md, written by the same agent
+    # that could have edited the file. Detection is cheap; prevention is not
+    # available, since the agent must be able to write the plan in the first
+    # place.
+    moved, locked_count, unlocked = [], 0, []
+    for experiment in experiments_module.list_experiments():
+        now = experiments_module.plan_sha256(experiment.experiment_id)
+        if now is None:
+            continue
+        locked = experiments_module.locked_plan_sha256(experiment.experiment_id)
+        if locked is None:
+            unlocked.append(experiment.experiment_id)
+        elif locked != now:
+            moved.append(f"{experiment.experiment_id}: locked {locked[:12]}, now {now[:12]}")
+        else:
+            locked_count += 1
+    if locked_count or moved or unlocked:
+        checks.append(
+            Check(
+                "rule 3 · locked plans unchanged",
+                not moved,
+                f"{locked_count} plan(s) still hash to what was journaled before scoring"
+                if not moved
+                else "; ".join(moved) + " — a prediction edited after the fact is not a prediction",
+            )
+        )
+    if unlocked:
+        checks.append(
+            Check(
+                "rule 3 · plans never locked",
+                True,
+                f"{len(unlocked)} plan(s) with no journaled hash ({', '.join(unlocked[:3])}); "
+                "their predictions cannot be shown to predate the scoring",
+                informational=True,
+            )
+        )
+
     # ---- Rule 4: no looking up the answers --------------------------------- #
     from . import leakage
 

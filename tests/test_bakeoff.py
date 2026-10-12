@@ -132,12 +132,72 @@ def test_wcg_rule_corrects_boys_and_women_by_their_group() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_every_arm_states_a_hypothesis_and_builds() -> None:
-    registry = bakeoff.arms_for(champion.INITIAL)
+#: A champion that carries every fitted transform — what crowning rf_kitchen in
+#: exp-007 made the reigning config look like.
+GROUP_CHAMPION: dict[str, object] = {
+    "name": "rf_kitchen",
+    "model": "random_forest",
+    "params": {"clf__n_estimators": 400, "clf__min_samples_leaf": 3, "clf__max_features": 0.5},
+    "features": [
+        "Sex",
+        "Pclass",
+        "Age",
+        "Fare",
+        "SibSp",
+        "Parch",
+        "Embarked",
+        "FamilySize",
+        "IsAlone",
+        "TitleFine",
+        "Deck",
+        "AgeMissing",
+        "TicketGroupSize",
+        *bakeoff.GROUP,
+        *bakeoff.WCG,
+    ],
+    "engineer": ["age_by_title", "ticket_size", "group"],
+    "members": [],
+}
+
+
+@pytest.mark.parametrize("reigning", [champion.INITIAL, GROUP_CHAMPION], ids=["plain", "group"])
+def test_every_arm_states_a_hypothesis_and_builds(reigning: dict) -> None:
+    """The arm set has to survive its own champion being promoted.
+
+    This was pinned to ``champion.INITIAL`` and so could never see the defect
+    crowning rf_kitchen introduced: the arms were "the champion's features plus
+    one change", so each one inherited fitted columns its own ``engineer`` does
+    not produce, and 15 of 21 stopped fitting.
+    """
+    registry = bakeoff.arms_for(reigning)
     assert next(iter(registry)) == "champion"
     for name, arm in registry.items():
         assert len(arm.hypothesis) > 20, name
-        bakeoff.build(arm.config(registry), seed=0)
+        config = arm.config(registry)
+        features = config["features"]
+        assert len(features) == len(set(features)), f"{name} names a feature twice"
+        bakeoff.build(config, seed=0)
+
+
+def test_the_arm_base_leaves_out_the_champions_fitted_columns() -> None:
+    # An arm can only start from the part of a champion it could rebuild itself.
+    base = bakeoff.plain_features(GROUP_CHAMPION)
+    assert not set(base) & bakeoff.FITTED_COLUMNS
+    assert "TitleFine" in base and "Sex" in base
+    # ...but the champion arm keeps the lot, because it is the reference.
+    registry = bakeoff.arms_for(GROUP_CHAMPION)
+    assert set(registry["champion"].features) == set(GROUP_CHAMPION["features"])
+
+
+def test_an_arm_using_a_fitted_column_must_declare_its_transform() -> None:
+    # Select raises KeyError deep inside a fold, where run() logs the arm as
+    # failed and carries on -- so a bake-off would crown from the survivors.
+    arm = bakeoff.Arm("broken", "x" * 25, "random_forest", ("Sex", *bakeoff.WCG))
+    with pytest.raises(ValueError, match="without the transform"):
+        arm.config()
+    assert bakeoff.required_steps(("Sex", *bakeoff.WCG)) == ("group",)
+    # age_by_title adds no column, so it is a choice and never required.
+    assert bakeoff.required_steps(("Age",)) == ()
 
 
 def test_ensemble_configs_inline_their_members() -> None:
@@ -338,3 +398,194 @@ def test_close_does_not_report_a_val_score_as_best_cv(
     results_log.append_run(step="evaluate", model="m", cv_score=0.95, path=log_path)
     closed = experiments.close_experiment(exp.experiment_id)
     assert closed.best_cv == pytest.approx(0.80)
+
+
+# --------------------------------------------------------------------------- #
+# locked predictions
+# --------------------------------------------------------------------------- #
+
+
+def test_locking_a_plan_journals_its_hash_and_survives_a_relock(
+    sandbox: Path, frozen_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    journal = tmp_path / "run_log.jsonl"
+    monkeypatch.setattr(paths, "RUN_LOG", journal)
+    experiments.open_experiment("locked", frozen_dir=frozen_dir)
+    experiment_id = experiments.current_experiment().experiment_id
+    plan = experiments.plan_path_for(experiment_id)
+    plan.write_text("# plan\n\nrf_wcg beats the champion by +0.005 to +0.020.\n")
+
+    digest = experiments.lock_plan(experiment_id)
+    assert experiments.locked_plan_sha256(experiment_id) == digest
+    # Idempotent: re-locking an unchanged plan is not an error.
+    assert experiments.lock_plan(experiment_id) == digest
+
+
+def test_a_locked_plan_cannot_be_rewritten(
+    sandbox: Path, frozen_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "run_log.jsonl")
+    experiments.open_experiment("locked", frozen_dir=frozen_dir)
+    experiment_id = experiments.current_experiment().experiment_id
+    plan = experiments.plan_path_for(experiment_id)
+    plan.write_text("# plan\n\nI predict +0.005.\n")
+    experiments.lock_plan(experiment_id)
+
+    # Editing predictions once the answer is known is the whole failure mode.
+    plan.write_text("# plan\n\nI predict +0.026, which is what happened.\n")
+    with pytest.raises(RuntimeError, match="cannot be rewritten"):
+        experiments.lock_plan(experiment_id)
+
+
+def test_the_audit_catches_a_plan_that_moved_after_scoring(
+    sandbox: Path, frozen_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from titanic_agent import audit
+
+    monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "run_log.jsonl")
+    experiments.open_experiment("locked", frozen_dir=frozen_dir)
+    experiment_id = experiments.current_experiment().experiment_id
+    plan = experiments.plan_path_for(experiment_id)
+    plan.write_text("# plan\n\nI predict +0.005.\n")
+    experiments.lock_plan(experiment_id)
+
+    def named(report, name):
+        return next(c for c in report.checks if c.name == name)
+
+    report = audit.audit(frozen_dir=frozen_dir, log_path=tmp_path / "results.csv")
+    assert named(report, "rule 3 · locked plans unchanged").passed
+
+    plan.write_text("# plan\n\nI predict +0.026, which is what happened.\n")
+    report = audit.audit(frozen_dir=frozen_dir, log_path=tmp_path / "results.csv")
+    check = named(report, "rule 3 · locked plans unchanged")
+    assert not check.passed
+    assert "not a prediction" in check.detail
+
+
+def test_the_audit_notes_an_experiment_whose_plan_was_never_locked(
+    sandbox: Path, frozen_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from titanic_agent import audit
+
+    monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "run_log.jsonl")
+    experiments.open_experiment("unlocked", frozen_dir=frozen_dir)
+    experiment_id = experiments.current_experiment().experiment_id
+    experiments.plan_path_for(experiment_id).write_text("# plan\n\nunlocked predictions\n")
+
+    report = audit.audit(frozen_dir=frozen_dir, log_path=tmp_path / "results.csv")
+    note = next(c for c in report.checks if c.name == "rule 3 · plans never locked")
+    # Informational: a missing lock is not a violation, it is an absence of
+    # evidence, and the audit must not blur the two.
+    assert note.informational and note.passed
+    assert experiment_id in note.detail
+
+
+# --------------------------------------------------------------------------- #
+# the leak control
+# --------------------------------------------------------------------------- #
+
+
+def test_the_permutation_control_scores_at_chance_and_logs_unscored(
+    sandbox: Path, frozen_dir: Path, log_path: Path
+) -> None:
+    experiments.open_experiment("control", frozen_dir=frozen_dir)
+    result = bakeoff.permutation_control(
+        arms=("rf_wcg", "rule_wcg"),
+        shuffles=1,
+        folds=2,
+        repeats=1,
+        frozen_dir=frozen_dir,
+        log_path=log_path,
+    )
+    # The point of the control: with the labels destroyed there is nothing for
+    # an honest in-fold transform to find.
+    assert not result.leaking, result.describe()
+    assert result.ceiling > result.majority
+
+    frame = results_log.read_log(log_path)
+    rows = frame[frame["model"] == "permutation_control"]
+    assert len(rows) == 1
+    # A control is not a candidate; a score here would rank in "best cv".
+    assert pd.isna(rows["cv_score"].iloc[0])
+    assert not bool(rows["holdout_read"].iloc[0])
+    assert rows["params"].iloc[0]["leaking"] == []
+
+
+def test_the_control_covers_a_learned_model_over_each_rate() -> None:
+    # exp-007's one-off ran rf_group and the rule. A hand rule has far less
+    # power to exploit a leak than a forest, so a learned arm over *each* rate
+    # flavour is what the control has to carry.
+    assert "rf_group" in bakeoff.CONTROL_ARMS
+    assert "rf_wcg" in bakeoff.CONTROL_ARMS
+    registry = bakeoff.arms_for(champion.INITIAL)
+    for arm in bakeoff.CONTROL_ARMS:
+        assert "group" in registry[arm].engineer, arm
+
+
+def test_an_arm_beating_chance_on_shuffled_labels_is_flagged_leaking() -> None:
+    control = bakeoff.PermutationControl(majority=0.6169, n_rows=569, shuffles=3)
+    control.scores = {"honest": [0.59, 0.60, 0.61], "leaky": [0.74, 0.75, 0.76]}
+    assert control.leaking == ["leaky"]
+    assert "LEAKS" in control.describe() and "at chance" in control.describe()
+
+
+def test_a_bakeoff_refuses_to_score_when_the_control_fails(
+    sandbox: Path, frozen_dir: Path, log_path: Path, monkeypatch
+) -> None:
+    experiments.open_experiment("control", frozen_dir=frozen_dir)
+
+    def leaking(**kwargs):
+        control = bakeoff.PermutationControl(majority=0.62, n_rows=569, shuffles=1)
+        control.scores = {"rf_wcg": [0.80]}
+        return control
+
+    monkeypatch.setattr(bakeoff, "permutation_control", leaking)
+    # Nothing is scored and no validation split is read on a leak signal.
+    with pytest.raises(RuntimeError, match="classic Titanic leak"):
+        bakeoff.run(
+            only=["rf_wcg"],
+            folds=2,
+            repeats=1,
+            confirm_seeds=1,
+            frozen_dir=frozen_dir,
+            log_path=log_path,
+        )
+    frame = results_log.read_log(log_path)
+    assert not len(frame[frame["params"].map(lambda p: "delta_vs_champion" in p)])
+
+
+def test_a_correction_is_appended_beside_the_succession_not_folded_into_it(
+    sandbox: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """champion.jsonl is append-only, so a wrong number needs an amendment.
+
+    exp-007 stored its best-of-20 *selection* delta as ``delta_vs_previous``.
+    The code was fixed and a finding recorded, but the file a later experiment
+    reads still advertised the biased number with nothing beside it.
+    """
+    monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "run_log.jsonl")
+    champion.crown(champion.INITIAL, reason="seed " * 6, evidence=["r1"])
+    champion.crown(
+        {**champion.INITIAL, "name": "rf_kitchen"},
+        reason="won " * 8,
+        evidence=["r2"],
+        experiment_id="exp-007",
+        delta_vs_previous=0.0264,
+    )
+    champion.correct(
+        corrects="rf_kitchen (exp-007)",
+        field_name="delta_vs_previous",
+        was=0.0264,
+        now=0.0163,
+        reason="selection delta, not the fresh-seed confirmation",
+    )
+
+    # The succession is unchanged: a correction is not a crowning, and must not
+    # become the reigning champion or shift what the next experiment pairs to.
+    assert [c.name for c in champion.history()] == ["rf_baseline12", "rf_kitchen"]
+    assert champion.current().name == "rf_kitchen"
+    assert champion.current().delta_vs_previous == pytest.approx(0.0264)
+
+    amendment = champion.corrections()[-1]
+    assert amendment["corrects"] == "rf_kitchen (exp-007)"
+    assert amendment["now"] == pytest.approx(0.0163)

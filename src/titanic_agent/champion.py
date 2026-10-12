@@ -101,18 +101,75 @@ def _path(path: Path | None) -> Path:
     return Path(path) if path is not None else paths.CHAMPION
 
 
-def history(path: Path | None = None) -> list[Champion]:
-    """Every champion, oldest first."""
+def _entries(path: Path | None = None) -> list[dict[str, Any]]:
+    """Every line of the succession file, parsed, oldest first."""
     target = _path(path)
     try:
         text = target.read_text(encoding="utf-8")
     except OSError:
         return []
-    found: list[Champion] = []
+    found: list[dict[str, Any]] = []
     for line in text.splitlines():
         if line.strip():
-            found.append(Champion(**json.loads(line)))
+            found.append(json.loads(line))
     return found
+
+
+def history(path: Path | None = None) -> list[Champion]:
+    """Every champion, oldest first. Correction records are not champions."""
+    return [
+        Champion(**{k: v for k, v in entry.items() if k != "kind"})
+        for entry in _entries(path)
+        if entry.get("kind", "champion") == "champion"
+    ]
+
+
+def corrections(path: Path | None = None) -> list[dict[str, Any]]:
+    """Amendments to earlier entries, oldest first. See :func:`correct`."""
+    return [entry for entry in _entries(path) if entry.get("kind") == "correction"]
+
+
+def correct(
+    *,
+    corrects: str,
+    field_name: str,
+    was: Any,
+    now: Any,
+    reason: str,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Append a correction to an earlier entry. The entry itself is never edited.
+
+    The succession is append-only for the same reason the ledger is, so a
+    crowning that recorded the wrong number cannot be fixed in place — and
+    exp-007's did. Its ``delta_vs_previous`` is **+0.0264**, the best-of-20
+    *selection* delta; the honest figure is the +0.0163 fresh-seed confirmation,
+    and exp-008 later replicated it at +0.0129 on rows the promotion never saw.
+    The code was fixed for later crownings and a finding recorded the error, but
+    the file a future experiment actually reads still advertised +0.0264 with
+    nothing beside it. An amendment belongs where the reader is.
+    """
+    from . import locking, run_log
+
+    entry = {
+        "kind": "correction",
+        "corrects": corrects,
+        "field": field_name,
+        "was": was,
+        "now": now,
+        "reason": reason,
+        "recorded_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
+    }
+    target = _path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with locking.locked(target), target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    run_log.record(
+        "decision",
+        step="champion",
+        detail=f"correction to {corrects}.{field_name}: {was} -> {now}. {reason}"[:600],
+    )
+    return entry
 
 
 def current(path: Path | None = None) -> Champion | None:
@@ -277,6 +334,14 @@ def main(argv: list[str] | None = None) -> int:
             f"{entry.experiment_id or 'seed':<28}{delta}"
         )
         print(f"    {entry.reason}")
+    for amendment in corrections():
+        # Printed with the succession, never folded into it: a reader of the
+        # file has to see that a recorded number was corrected.
+        print(
+            f"! correction to {amendment['corrects']}.{amendment['field']}: "
+            f"{amendment['was']} -> {amendment['now']}"
+        )
+        print(f"    {amendment['reason']}")
     return 0
 
 

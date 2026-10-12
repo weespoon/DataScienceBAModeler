@@ -101,22 +101,36 @@ def _run_git(*args: str) -> str | None:
 #: before its first row was written, so every row carried -dirty however clean
 #: the code was (exp-008: 14 of 14 rows on committed bbef8fc). A flag that can
 #: never be off says nothing. Code is what a score must be tied to.
+#: ``settings.local.json`` under ``.claude`` is gitignored, so a developer's own
+#: permissions never dirty a row.
 CODE_PATHS: tuple[str, ...] = (
     "src",
+    "tests",
     "pyproject.toml",
     "uv.lock",
     "requirements.txt",
     "Makefile",
+    # The rules and the harness that enforces them. A row tied to committed
+    # `src` while the hook denying writes to data/frozen, the skill driving the
+    # pass, or CLAUDE.md itself was uncommitted is tied to half of what ran.
+    ".claude",
+    "CLAUDE.md",
 )
 
 
 def _git_sha(short: bool = True) -> str:
     """Return the current git commit SHA, or ``"unknown"`` outside a repo.
 
-    A ``-dirty`` suffix is appended when the working tree has uncommitted
-    changes, because without it the column is a quiet lie: the bare SHA claims
-    the row was produced by committed code that may not be what ran. A score
-    you cannot tie to code is not reproducible, so the ledger has to say so.
+    A ``-dirty`` suffix is appended when anything under :data:`CODE_PATHS` has
+    uncommitted changes, because without it the column is a quiet lie: the bare
+    SHA claims the row was produced by committed code that may not be what ran.
+    A score you cannot tie to code is not reproducible, so the ledger says so.
+
+    Not the whole working tree, which is what this checked until 2026-10-11:
+    the pipeline appends to tracked files of its own (the ledger, the journal,
+    every ``experiment.json``), so opening an experiment dirtied the tree before
+    its first row existed and the flag could never clear. A flag that is always
+    on carries no information.
     """
     raw = _run_git("rev-parse", *(["--short"] if short else []), "HEAD")
     if raw is None:
@@ -419,15 +433,34 @@ def read_log(path: Path | None = None):
     return frame
 
 
-def best_run(step: str | None = None, path: Path | None = None):
-    """Return the row with the highest ``cv_score``, optionally within a step.
+def cv_rows(frame):
+    """Scored rows whose ``cv_score`` really is a cross-validated score.
 
-    Returns ``None`` when the ledger holds no scored runs.
+    The ``evaluate`` step writes the **validation** score into the same column —
+    one draw over 143 rows, not an average over folds — which is why any caller
+    reaching for "the best cv" has to exclude it. Left in, exp-007's close line
+    journaled its val read (0.8531) as ``best_cv``. The filter lives here so it
+    is remembered once instead of at every call site; a row written from now on
+    also carries ``params["metric"]`` so it says what it is on its own.
+    """
+    from . import leakage
+
+    scored = frame.dropna(subset=["cv_score"])
+    if scored.empty:
+        return scored
+    return scored[scored["step"].map(leakage.metric_for) == "cv"]
+
+
+def best_run(step: str | None = None, path: Path | None = None):
+    """Return the row with the highest cross-validated score, within a step.
+
+    Returns ``None`` when the ledger holds no scored runs. Validation rows are
+    excluded even when ``step`` is ``None`` — see :func:`cv_rows`.
     """
     frame = read_log(path)
     if step is not None:
         frame = frame[frame["step"] == step]
-    frame = frame.dropna(subset=["cv_score"])
+    frame = cv_rows(frame)
     if frame.empty:
         return None
     return frame.loc[frame["cv_score"].astype(float).idxmax()]

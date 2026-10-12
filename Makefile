@@ -90,6 +90,13 @@ bakeoff: setup ## Many arms vs the persisted champion (needs an open experiment)
 bakeoff-decide: setup ## Nested-CV the bake-off, apply its declared rule, crown or hold
 	$(PYTHON) -m titanic_agent.bakeoff decide $(if $(ONLY),--only $(ONLY),)
 
+# The in-fold group rates read the label, so this is the one check between the
+# programme and the classic Titanic leak. `make bakeoff` runs it itself before
+# scoring any label-reading arm; this target is for re-running it on its own
+# after a change to Engineer. Exits non-zero if anything beats chance.
+permutation: setup ## Leak control: in-fold group features on shuffled labels
+	$(PYTHON) -m titanic_agent.bakeoff control $(if $(ARM_SET),--set $(ARM_SET),)
+
 champion: setup ## The persisted champion every experiment is paired against
 	@$(PYTHON) -m titanic_agent.champion
 

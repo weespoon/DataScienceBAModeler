@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pytest
+
 from titanic_agent import results_log
 
 
@@ -104,3 +106,47 @@ def test_dirty_flag_tracks_code_not_the_artifacts_the_pipeline_writes(
 
     (tmp_path / "src" / "m.py").write_text("x = 2\n")
     assert results_log._git_sha().endswith("-dirty")
+
+
+def test_cv_rows_excludes_the_validation_score_sharing_the_column(log_path) -> None:
+    """``evaluate`` writes a val score into ``cv_score``; "best cv" must not see it.
+
+    exp-007 journaled its val read (0.8531) as ``best_cv`` because the filter
+    lived at the call site and that call site did not have it. One helper, so
+    it is remembered once.
+    """
+    from titanic_agent import results_log
+
+    results_log.append_run(
+        step="tune", model="random_forest", params={}, cv_score=0.8395, path=log_path
+    )
+    results_log.append_run(
+        step="evaluate",
+        model="random_forest",
+        params={"metric": "val"},
+        cv_score=0.8531,
+        path=log_path,
+    )
+    frame = results_log.read_log(log_path)
+    assert len(frame.dropna(subset=["cv_score"])) == 2
+    cv = results_log.cv_rows(frame)
+    assert list(cv["step"]) == ["tune"]
+    assert float(cv["cv_score"].max()) == pytest.approx(0.8395)
+    # best_run with no step argument used to return the val row.
+    best = results_log.best_run(path=log_path)
+    assert best["step"] == "tune"
+
+
+def test_an_evaluate_row_says_which_metric_it_carries(log_path) -> None:
+    from titanic_agent import results_log
+
+    results_log.append_run(
+        step="evaluate",
+        model="random_forest",
+        params={"metric": "val", "val_rows": 143},
+        cv_score=0.8531,
+        path=log_path,
+    )
+    row = results_log.read_log(log_path).iloc[0]
+    # Readable on its own, without a step-to-metric table.
+    assert row["params"]["metric"] == "val"

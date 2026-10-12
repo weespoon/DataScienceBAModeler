@@ -50,6 +50,7 @@ Fitted state lives inside the fold
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -274,12 +275,21 @@ class Arm:
 
         Ensemble members are inlined, so a config rebuilds without the registry
         that produced it — which is what lets a later experiment re-score it.
+
+        Raises:
+            ValueError: A feature needs a fitted transform this arm does not
+                declare. ``Select`` would raise ``KeyError`` deep inside a fold,
+                where :func:`run` catches it and logs the arm as failed — so the
+                bake-off would carry on and crown a winner from whatever
+                survived. Better to refuse while the registry is being built.
         """
         payload: dict[str, Any] = {
             "name": self.name,
             "model": self.model,
             "params": dict(self.params),
-            "features": list(self.features),
+            # Deduplicated, order preserved: a column named twice reaches the
+            # estimator twice, which changes what max_features means.
+            "features": list(dict.fromkeys(self.features)),
             "engineer": list(self.engineer),
             "members": [],
         }
@@ -287,7 +297,16 @@ class Arm:
             if registry is None:
                 raise ValueError(f"{self.name} has members; pass the registry to inline them")
             payload["members"] = [registry[m].config(registry) for m in self.members]
+            # Decorative: build() recurses into members and never reads this.
+            # It is here for the ledger row and make leakage's provenance check.
             payload["features"] = sorted({f for m in payload["members"] for f in m["features"]})
+            return payload
+        missing = sorted(set(required_steps(payload["features"])) - set(payload["engineer"]))
+        if missing:
+            raise ValueError(
+                f"arm {self.name!r} uses fitted columns without the transform that makes "
+                f"them: needs {missing}, declares {payload['engineer']}"
+            )
         return payload
 
 
@@ -305,6 +324,41 @@ def from_config(config: dict[str, Any]) -> Arm:
 
 GROUP = ("GroupSurvival", "GroupKnown")
 WCG = ("WCGSurvival", "WCGKnown")
+
+#: Every column some fitted transform produces. A feature in here is only
+#: available to an arm that declares the step producing it.
+FITTED_COLUMNS: frozenset[str] = frozenset(
+    column for columns in FITTED_OUTPUTS.values() for column in columns
+)
+
+
+def plain_features(config: dict[str, Any]) -> tuple[str, ...]:
+    """A config's features minus anything a fitted transform produced.
+
+    The bake-off arms are written as "the champion's *plain* features plus one
+    change" — "add TicketGroupSize", "add in-fold group survival". When the
+    champion carried no fitted transforms those were the same thing, so the
+    base was taken straight off the champion. The moment a group-aware champion
+    was crowned, every arm inherited fitted columns its own ``engineer`` does
+    not produce, and 15 of 21 stopped fitting at all. The base has to be the
+    part of a champion any arm can rebuild for itself.
+    """
+    return tuple(f for f in config["features"] if f not in FITTED_COLUMNS)
+
+
+def required_steps(features) -> tuple[str, ...]:
+    """The fitted transforms a feature list cannot be built without.
+
+    Only covers transforms that *add* a column. ``age_by_title`` rewrites Age in
+    place and so cannot be inferred from a feature list — it is a choice, not a
+    requirement.
+    """
+    needed = [
+        step for step, columns in FITTED_OUTPUTS.items() if columns and set(columns) & set(features)
+    ]
+    return tuple(needed)
+
+
 #: Bucketed and one-hot encodings for the linear models. exp-006 tested these on
 #: a random forest, the model least able to benefit; a linear model cannot
 #: express a non-monotone age or family effect without them.
@@ -323,8 +377,14 @@ RICH = (
 
 
 def arms_for(champion_config: dict[str, Any]) -> dict[str, Arm]:
-    """Every arm in this bake-off, champion first. Order is run order."""
-    base = tuple(champion_config["features"])
+    """Every arm in this bake-off, champion first. Order is run order.
+
+    Each arm is the champion's *plain* features plus one change — see
+    :func:`plain_features` for why it is not simply the champion's features.
+    The ``champion`` arm itself keeps its full config, fitted transforms and
+    all, because it is the reference every delta is measured against.
+    """
+    base = plain_features(champion_config)
     rf = (
         dict(champion_config["params"])
         if champion_config["model"] == "random_forest"
@@ -344,7 +404,11 @@ def arms_for(champion_config: dict[str, Any]) -> dict[str, Arm]:
             "champion",
             "The reference. Re-scored here so every delta is paired.",
             champion_config["model"],
-            base,
+            # Its *own* features, fitted columns included -- not `base`. A
+            # reference arm stripped to the plain columns is not the champion,
+            # and every delta in the experiment would be measured against
+            # something that was never crowned.
+            tuple(champion_config["features"]),
             champion_config["params"],
             tuple(champion_config.get("engineer", ())),
         ),
@@ -851,6 +915,7 @@ def run(
     folds: int = CV_FOLDS,
     repeats: int = CV_REPEATS,
     confirm_seeds: int = CONFIRM_SEEDS,
+    control: bool = True,
     frozen_dir: Path = paths.FROZEN_DIR,
     log_path: Path = paths.RESULTS_LOG,
     champion_path: Path | None = None,
@@ -872,6 +937,38 @@ def run(
     frame = tune.load_training_frame(frozen_dir)
     cv_label = f"{folds}x{repeats} repeated stratified"
     challengers = len(names) - 1
+
+    # Lock the predictions before any arm is scored, if there are any. Done by
+    # hand in exp-007 and exp-008 -- correctly, both hashes still verify -- but
+    # a step that remembers it for itself cannot forget. An experiment with no
+    # plan.md is not refused here; `make audit` reports that it has none.
+    try:
+        experiments.lock_plan(experiment.experiment_id)
+    except RuntimeError as exc:
+        run_log.record("decision", step="bakeoff", detail=f"plan not locked: {exc}")
+
+    # The leak control runs *before* any arm is scored, whenever an arm reads
+    # the label to build a feature. exp-007 declared this in its plan and did it
+    # by hand; a step that does it itself cannot skip it on the run where it
+    # matters. The arms here are the controls, not the arms being scored, so
+    # this costs the same ~20s however many challengers there are.
+    reads_labels = any("group" in registry[name].engineer for name in names)
+    if control and reads_labels:
+        guard = permutation_control(
+            arm_set=arm_set,
+            folds=folds,
+            repeats=repeats,
+            frozen_dir=frozen_dir,
+            log_path=log_path,
+            champion_path=champion_path,
+        )
+        if guard.leaking:
+            raise RuntimeError(
+                f"permutation control failed: {guard.leaking} scored above chance "
+                f"({guard.ceiling:.4f}) on shuffled labels. The in-fold group features are "
+                "reading labels across folds -- the classic Titanic leak. Nothing is scored "
+                "and no validation split is read until Engineer is fixed.\n" + guard.describe()
+            )
 
     run_log.record(
         "decision",
@@ -1067,8 +1164,11 @@ def confirm(
     return compare_module.PairedResult(
         label=label,
         delta=float(deltas_arr.mean()),
-        # The SE of the seed-averaged delta. Seeds share rows, so averaging does
-        # not shrink it by sqrt(seeds); the per-seed SE is the honest floor.
+        # Seeds share rows, so averaging cannot shrink the row-draw component:
+        # the per-seed SE is the floor. It used to be computed here and then
+        # silently overridden by `seed_sd`, a standard deviation, which is
+        # root-n-seeds larger. PairedResult.se now takes the larger of this and
+        # seed_sd/sqrt(n_seeds) and says which one it used.
         naive_se=float(np.mean(se)),
         score_a=float(np.mean(a_means)),
         score_b=float(np.mean(b_means)),
@@ -1078,6 +1178,7 @@ def confirm(
         seed=seed,
         fold_diffs=tuple(float(d) for d in deltas_arr),
         seed_sd=float(deltas_arr.std(ddof=1)) if len(deltas_arr) > 1 else None,
+        n_seeds=len(deltas_arr),
     )
 
 
@@ -1240,6 +1341,164 @@ def decide(bake: Bakeoff, nested_result: NestedBakeoff | None) -> Decision:
 
 
 # --------------------------------------------------------------------------- #
+# the leak control
+# --------------------------------------------------------------------------- #
+
+
+#: Arms the permutation control scores. The group rate reads the label, so this
+#: is the one check standing between the whole programme and the classic Titanic
+#: leak. It covers both rate flavours **and** a learned model over each: a hand
+#: rule has far less power to exploit a leak than a forest does, so a rule
+#: scoring at chance is weaker evidence than it looks.
+CONTROL_ARMS: tuple[str, ...] = ("rf_group", "rf_wcg", "rule_wcg")
+
+
+@dataclass
+class PermutationControl:
+    """What the in-fold group features score when the labels are noise."""
+
+    majority: float = 0.0
+    n_rows: int = 0
+    shuffles: int = 0
+    scores: dict[str, list[float]] = field(default_factory=dict)
+    run_id: str = ""
+    seconds: float = 0.0
+
+    @property
+    def band(self) -> float:
+        """2 SE on an accuracy of ``majority`` over ``n_rows``."""
+        p = self.majority
+        return 2.0 * math.sqrt(p * (1 - p) / self.n_rows) if self.n_rows else 0.0
+
+    @property
+    def ceiling(self) -> float:
+        """Above this, "at chance" is no longer an honest description."""
+        return self.majority + self.band
+
+    def mean(self, arm: str) -> float:
+        """Mean accuracy for one arm over the shuffles."""
+        return float(np.mean(self.scores.get(arm) or [0.0]))
+
+    @property
+    def leaking(self) -> list[str]:
+        """Arms that beat chance on shuffled labels. Any entry stops the run."""
+        return sorted(a for a in self.scores if self.mean(a) > self.ceiling)
+
+    def describe(self) -> str:
+        """One line per arm, with the band it had to stay inside."""
+        lines = [
+            f"majority {self.majority:.4f}, 2 SE band +/-{self.band:.4f} "
+            f"on {self.n_rows} rows, {self.shuffles} shuffles"
+        ]
+        for arm in sorted(self.scores):
+            verdict = "LEAKS" if arm in self.leaking else "at chance"
+            lines.append(f"  {arm:<12} {self.mean(arm):.4f}  {verdict}")
+        return "\n".join(lines)
+
+
+def permutation_control(
+    *,
+    arms: tuple[str, ...] = CONTROL_ARMS,
+    shuffles: int = 3,
+    arm_set: str = "bakeoff",
+    folds: int = CV_FOLDS,
+    repeats: int = CV_REPEATS,
+    seed: int | None = None,
+    frozen_dir: Path = paths.FROZEN_DIR,
+    log_path: Path = paths.RESULTS_LOG,
+    champion_path: Path | None = None,
+) -> PermutationControl:
+    """Score the group-aware arms on permuted labels: they must land at chance.
+
+    :class:`Engineer` computes group survival from the label, which is the
+    classic Titanic leak if it escapes the fold. The construction says it
+    cannot: rates come from the training fold only, and a training row's own
+    label is left out of its own feature. This is the measurement that catches
+    the construction being wrong anyway — destroy the relationship between
+    passengers and labels, and any arm still scoring above the majority rate is
+    reading labels it should not see.
+
+    exp-007 ran this once, by hand, from a script that was never committed, and
+    exp-008 then cited the result as settled. A control that cannot be re-run is
+    a number, not a control — nothing would have re-checked it after a change to
+    :class:`Engineer`.
+
+    Returns:
+        The scores and whether anything beat chance. :func:`main` exits
+        non-zero on a leak.
+    """
+    from sklearn.model_selection import RepeatedStratifiedKFold, cross_val_score
+
+    from . import experiments, results_log, run_log, tune
+
+    experiment = experiments.current_experiment()
+    seed = seed if seed is not None else (experiment.seed if experiment else paths.SEED)
+    registry = registry_for(arm_set, champion_path)
+    unknown = [a for a in arms if a not in registry]
+    if unknown:
+        raise ValueError(f"unknown control arms {unknown}; have {sorted(registry)}")
+    frame = tune.load_training_frame(frozen_dir)
+    y = frame["Survived"].to_numpy()
+
+    started = time.perf_counter()
+    result = PermutationControl(
+        majority=float(max(y.mean(), 1 - y.mean())), n_rows=len(frame), shuffles=shuffles
+    )
+    rng = np.random.default_rng(seed)
+    for arm in arms:
+        config = registry[arm].config(registry)
+        result.scores[arm] = []
+        for shuffle in range(shuffles):
+            permuted = rng.permutation(y)
+            splitter = RepeatedStratifiedKFold(
+                n_splits=folds, n_repeats=repeats, random_state=seed + shuffle
+            )
+            scores = cross_val_score(
+                build(config, seed=seed),
+                design(frame),
+                permuted,
+                cv=splitter,
+                scoring="accuracy",
+                n_jobs=-1,
+            )
+            result.scores[arm].append(float(scores.mean()))
+    result.seconds = time.perf_counter() - started
+
+    verdict = f"LEAK: {result.leaking} beat chance" if result.leaking else "all arms at chance"
+    result.run_id = results_log.append_run(
+        step="bakeoff",
+        model="permutation_control",
+        params={
+            "control": f"labels permuted {shuffles}x, {folds}x{repeats} CV",
+            "arms": list(arms),
+            "scores": {a: [round(s, 4) for s in v] for a, v in result.scores.items()},
+            "majority_rate": round(result.majority, 4),
+            "ceiling": round(result.ceiling, 4),
+            "leaking": result.leaking,
+        },
+        # A control is not a candidate: a score here would rank in "best cv".
+        cv_score=None,
+        cv_folds=folds * repeats,
+        seed=seed,
+        holdout_read=False,  # attested: train rows only
+        notes=(
+            "bakeoff leak control: in-fold group features on permuted labels; "
+            + "; ".join(f"{a} {result.mean(a):.4f}" for a in sorted(result.scores))
+            + f"; majority {result.majority:.4f}, ceiling {result.ceiling:.4f}; {verdict}. "
+            "Unscored on purpose: it is a control, not a candidate."
+        ),
+        path=log_path,
+    )
+    run_log.record(
+        "step_failed" if result.leaking else "step_finished",
+        step="bakeoff",
+        detail=f"permutation control: {verdict}; {result.describe().splitlines()[0]}",
+        run_id=result.run_id,
+    )
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # report
 # --------------------------------------------------------------------------- #
 
@@ -1358,7 +1617,9 @@ def main(argv: list[str] | None = None) -> int:
     from . import run_log, runs
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", nargs="?", default="run", choices=("run", "decide", "list"))
+    parser.add_argument(
+        "command", nargs="?", default="run", choices=("run", "decide", "list", "control")
+    )
     parser.add_argument("--only", default="", help="comma-separated arm names")
     parser.add_argument("--set", dest="arm_set", default="bakeoff", choices=ARM_SETS)
     args = parser.parse_args(argv)
@@ -1376,6 +1637,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         for name, arm in registry.items():
             print(f"  {name:<18} {arm.model:<24} {arm.hypothesis}")
+        return 0
+
+    if args.command == "control":
+        try:
+            control = permutation_control(arm_set=args.arm_set)
+        except (RuntimeError, ValueError) as exc:
+            print(f"permutation control failed: {exc}")
+            return 1
+        print(control.describe())
+        if control.leaking:
+            print(
+                "\nThe in-fold group features scored above chance on shuffled labels. "
+                "That is the classic Titanic leak. Stop: do not score a bake-off, and "
+                "do not read a validation split, until Engineer is fixed."
+            )
+            return 1
         return 0
 
     # Resolved once: with no pass id exported, every call to run_dir() mints a

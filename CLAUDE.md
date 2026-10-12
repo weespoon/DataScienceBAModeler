@@ -108,9 +108,14 @@ chmod 0444 and every one is checksummed in the manifest.
   before it can log, log that fact afterwards — an exception that kills the
   process writes nothing, and a gap in the ledger is indistinguishable from a
   run you chose not to record.
-- `git_sha` carries a `-dirty` suffix when the working tree has uncommitted
-  changes. Do not strip it. A score you cannot tie to committed code is not
-  reproducible, and the column exists to say so out loud.
+- `git_sha` carries a `-dirty` suffix when anything under
+  `results_log.CODE_PATHS` has uncommitted changes — `src`, `tests`, the
+  dependency files, the `Makefile`, `.claude` and this file. **Not** the whole
+  tree: the pipeline appends to tracked files of its own, so opening an
+  experiment dirtied the tree before its first row existed and the flag could
+  never clear. Do not strip it, and do not narrow that list to make a row look
+  clean. A score you cannot tie to committed code is not reproducible, and the
+  column exists to say so out loud.
 - `make log` prints the ledger. Compare only rows sharing a `frozen_sha256`.
 
 ## Rule 4 — do not look up the answers
@@ -157,7 +162,18 @@ only one of them can see a difference that small.
   number compared against nothing. It cannot rank two candidates and it cannot
   measure selection bias; it catches 0.06-sized defects, which is how it caught
   exp-002's contamination. Do not read a cv→val gap as a measurement of
-  anything — the three recorded gaps are +0.027, +0.048, −0.029.
+  anything — the five recorded gaps are +0.027, +0.048, −0.029, +0.014, +0.042.
+- **A val read is no longer independent of the champion it scores.** Each split
+  is a fresh draw from the same 712 rows, so ~80% of an experiment's validation
+  rows were the previous experiment's *training* rows — the rows that selected
+  the champion (exp-008: 116 of 143). The persisted champion bought
+  comparability with exactly this. The tripwire still works; a gap read as
+  evidence about selection does not.
+- **Any feature fitted from the label runs `make permutation` first.** The
+  in-fold group rates are the classic Titanic leak, and `make bakeoff` refuses
+  to score a label-reading arm until the control lands at chance. Re-run it
+  after any change to `bakeoff.Engineer` — a control you cannot re-run is a
+  number, not a control.
 - **Do not ask for more validation reads.** The answer is arithmetic, already
   worked out: 143 rows move in steps of 1/143 = 0.0070, so a true difference of
   0.004 cannot show up as 0.004. Pairing gets to ~0.06; Thresholdout's own noise

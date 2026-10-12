@@ -103,6 +103,97 @@ def test_resolves_refuses_an_effect_below_its_own_precision() -> None:
     assert result.resolves(10.0)
 
 
+def test_a_seed_spread_is_not_a_standard_error() -> None:
+    """exp-007 reported the sd across 5 seeds as if it were the SE of their mean.
+
+    Both numbers are real and the label said "seed sd", but sigma, the 0.003
+    bar and ``champion.jsonl``'s reason text all divided by it, and the one
+    inference drawn from the ratio came out backwards. The sd answers "what
+    might one fresh seed show"; only sd/sqrt(n) answers "how well is the
+    average pinned".
+    """
+    # exp-007's winner, its published numbers.
+    result = compare.PairedResult(
+        label="rf_kitchen vs champion",
+        delta=0.016343,
+        naive_se=0.005284,
+        score_a=0.84,
+        score_b=0.824,
+        n_folds=15,
+        n_rows=569,
+        repeats=3,
+        seed=20251017,
+        seed_sd=0.007351,
+        n_seeds=5,
+    )
+    assert result.seed_se == pytest.approx(0.007351 / 5**0.5, rel=1e-6)
+    assert result.seed_se < result.naive_se
+    # The floor, not the sd: row-draw spread does not shrink with seeds, so
+    # whichever of the two is larger is the honest uncertainty.
+    assert result.se == pytest.approx(result.naive_se)
+    assert result.sigma == pytest.approx(3.09, abs=0.01)
+    # The sd stays visible -- it is the right number for a different question.
+    assert "seed sd 0.0074 over 5" in result.describe()
+    params = result.as_params()
+    assert params["se"] == pytest.approx(result.naive_se, abs=1e-6)
+    assert params["seed_sd"] == pytest.approx(0.007351, abs=1e-6)
+    assert params["n_seeds"] == 5
+
+
+def test_the_decisions_the_old_denominator_made_are_unchanged() -> None:
+    # The error was conservative, so no promotion was wrongly granted. If a
+    # correction ever flips a recorded decision, that is a different problem
+    # and this test should fail rather than let it pass quietly.
+    promoted = compare.PairedResult(
+        label="rf_kitchen",
+        delta=0.016343,
+        naive_se=0.005284,
+        score_a=0.84,
+        score_b=0.824,
+        n_folds=15,
+        n_rows=569,
+        repeats=3,
+        seed=1,
+        seed_sd=0.007351,
+        n_seeds=5,
+    )
+    held = compare.PairedResult(
+        label="without_max_features",
+        delta=-0.0032,
+        naive_se=0.0024,
+        score_a=0.83,
+        score_b=0.8332,
+        n_folds=15,
+        n_rows=569,
+        repeats=3,
+        seed=1,
+        seed_sd=0.0046,
+        n_seeds=5,
+    )
+    assert promoted.clears(compare.DELTA)
+    assert not held.clears(compare.DELTA)
+
+
+def test_a_seed_spread_with_no_seed_count_cannot_be_corrected() -> None:
+    # Rows written before n_seeds existed keep the old reading rather than
+    # inventing a divisor for them.
+    legacy = compare.PairedResult(
+        label="x",
+        delta=0.004,
+        naive_se=0.002,
+        score_a=0.84,
+        score_b=0.836,
+        n_folds=15,
+        n_rows=569,
+        repeats=3,
+        seed=1,
+        seed_sd=0.006,
+    )
+    assert legacy.seed_se is None
+    assert legacy.se == 0.006
+    assert "seed sd" in legacy.describe()
+
+
 def test_seed_sd_overrides_the_naive_se_when_measured() -> None:
     naive_only = compare.PairedResult(
         label="x",

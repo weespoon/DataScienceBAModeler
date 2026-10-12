@@ -52,6 +52,7 @@ Two numbers every result carries
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -98,8 +99,13 @@ class PairedResult:
     seed: int
     fold_diffs: tuple[float, ...] = ()
     #: Spread of ``delta`` across fold seeds, when :func:`seed_stability` ran.
-    #: ``None`` means nobody measured it for this comparison.
+    #: ``None`` means nobody measured it for this comparison. This is a
+    #: **standard deviation**, not a standard error: it says what a single
+    #: fresh seed might show, not how well the seed-averaged delta is pinned.
     seed_sd: float | None = None
+    #: How many fold seeds ``seed_sd`` was measured over. Needed to turn it
+    #: into an uncertainty on the average; without it there is no divisor.
+    n_seeds: int | None = None
 
     @property
     def quantum(self) -> float:
@@ -112,9 +118,36 @@ class PairedResult:
         return 1.0 / (self.n_rows * self.repeats)
 
     @property
+    def seed_se(self) -> float | None:
+        """Uncertainty the *averaging* removes: ``seed_sd`` over root-n-seeds.
+
+        Fold-draw luck is the one thing re-seeding averages away, and it does
+        shrink by root n. Row-draw luck does not: the rows are fixed, so no
+        number of seeds learns anything more about the population. That is why
+        this is not the whole answer — see :attr:`se`.
+        """
+        if self.seed_sd is None or not self.n_seeds or self.n_seeds < 2:
+            return None
+        return self.seed_sd / math.sqrt(self.n_seeds)
+
+    @property
     def se(self) -> float:
-        """The best available uncertainty: measured spread if there is one."""
-        return self.naive_se if self.seed_sd is None else self.seed_sd
+        """The honest floor on the uncertainty of ``delta``.
+
+        Reported ``seed_sd`` directly until 2026-10-11, which conflated a
+        standard deviation with a standard error and overstated the spread by
+        root n-seeds — for exp-007's winner, 0.0074 where the matched figure is
+        0.0033. The direction was conservative, so no promotion was wrongly
+        granted, but the one *inference* drawn from the ratio came out backwards
+        (see ``docs/MEASUREMENT.md``).
+
+        The larger of the two is the floor: fold-draw spread shrinks with
+        seeds, row-draw spread does not, and whichever dominates is the answer.
+        """
+        seed_se = self.seed_se
+        if seed_se is None:
+            return self.seed_sd if self.seed_sd is not None else self.naive_se
+        return max(self.naive_se, seed_se)
 
     @property
     def sigma(self) -> float:
@@ -142,7 +175,13 @@ class PairedResult:
         which is rounding rather than signal.
         """
         spread = f"{self.se:.4f}"
-        source = "seed sd" if self.seed_sd is not None else "naive SE"
+        if self.seed_se is None:
+            source = "seed sd" if self.seed_sd is not None else "naive SE"
+        else:
+            # Name which of the two floors won, and carry the sd beside it so a
+            # reader can still see what one fresh seed might have shown.
+            which = "seed SE" if self.seed_se >= self.naive_se else "naive SE"
+            source = f"{which}; seed sd {self.seed_sd:.4f} over {self.n_seeds}"
         note = "" if abs(self.passengers) >= 1 else "  [under one passenger]"
         return (
             f"{self.label}: {self.delta:+.4f} +/- {spread} ({source}, "
@@ -155,6 +194,9 @@ class PairedResult:
             "comparison": self.label,
             "delta": round(self.delta, 6),
             "naive_se": round(self.naive_se, 6),
+            # The number sigma was actually divided by, named so a later reader
+            # does not have to work out which floor won.
+            "se": round(self.se, 6),
             "sigma": round(self.sigma, 3),
             "passengers": round(self.passengers, 2),
             "n_folds": self.n_folds,
@@ -162,6 +204,10 @@ class PairedResult:
         }
         if self.seed_sd is not None:
             payload["seed_sd"] = round(self.seed_sd, 6)
+        if self.n_seeds is not None:
+            payload["n_seeds"] = self.n_seeds
+        if self.seed_se is not None:
+            payload["seed_se"] = round(self.seed_se, 6)
         return payload
 
 
@@ -204,6 +250,7 @@ def compare_scores(
     seed: int,
     repeats: int = CV_REPEATS,
     seed_sd: float | None = None,
+    n_seeds: int | None = None,
 ) -> PairedResult:
     """Build a :class:`PairedResult` from two fold vectors already computed.
 
@@ -230,6 +277,7 @@ def compare_scores(
         seed=seed,
         fold_diffs=tuple(float(d) for d in diff),
         seed_sd=seed_sd,
+        n_seeds=n_seeds,
     )
 
 
@@ -333,6 +381,7 @@ def seed_stability(
                 seed=seed,
                 fold_diffs=tuple(float(value) for value in deltas),
                 seed_sd=float(deltas.std(ddof=1)) if len(deltas) > 1 else None,
+                n_seeds=len(deltas),
             )
         )
     return results

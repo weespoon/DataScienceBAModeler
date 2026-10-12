@@ -35,8 +35,10 @@ out of step with the first.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -354,6 +356,89 @@ def val_reads_for(experiment_id: str, path: Path | None = None) -> list[dict[str
     return found
 
 
+def plan_path_for(experiment_id: str) -> Path:
+    """Where an experiment's locked plan and predictions live."""
+    return paths.EXPERIMENTS_DIR / experiment_id / "plan.md"
+
+
+def plan_sha256(experiment_id: str) -> str | None:
+    """The current hash of an experiment's ``plan.md``, or None if it has none."""
+    target = plan_path_for(experiment_id)
+    try:
+        return hashlib.sha256(target.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def lock_plan(experiment_id: str | None = None, *, path: Path | None = None) -> str:
+    """Journal the hash of ``plan.md`` so predictions cannot be edited afterwards.
+
+    Scoring predictions is only worth anything if the predictions were fixed
+    first, and nothing but this hash distinguishes a locked plan from one
+    rewritten once the answer was known. exp-007 and exp-008 both did it by
+    hand, which worked — both hashes still verify — but left the claim
+    "unchanged since its sha256" asserted in a report by the same agent that
+    could have changed the file.
+
+    Re-locking an unchanged plan is fine and idempotent. Re-locking a *changed*
+    one raises: if the plan has to change, that is a new experiment, not an
+    amendment to this one's predictions.
+
+    Raises:
+        RuntimeError: No ``plan.md``, or it has moved since it was locked.
+    """
+    from . import run_log
+
+    experiment_id = experiment_id or _require_current().experiment_id
+    digest = plan_sha256(experiment_id)
+    if digest is None:
+        raise RuntimeError(
+            f"{plan_path_for(experiment_id)} does not exist; write the plan and its "
+            "predictions before scoring anything"
+        )
+    locked = locked_plan_sha256(experiment_id, path=path)
+    if locked is not None and locked != digest:
+        raise RuntimeError(
+            f"{experiment_id}'s plan.md was locked at {locked[:12]} and now hashes to "
+            f"{digest[:12]}. A locked prediction cannot be rewritten -- open a new "
+            "experiment instead."
+        )
+    run_log.record(
+        "decision",
+        step="experiment",
+        detail=(
+            f"plan and predictions locked before scoring: "
+            f"{plan_path_for(experiment_id)} sha256={digest}"
+        ),
+        experiment_id=experiment_id,
+        plan_sha256=digest,
+        path=path,
+    )
+    return digest
+
+
+def locked_plan_sha256(experiment_id: str, *, path: Path | None = None) -> str | None:
+    """The hash journaled for this experiment's plan, or None if never locked.
+
+    Reads the structured ``plan_sha256`` field, falling back to the free-text
+    ``sha256=`` in ``detail`` so the two plans locked by hand before
+    :func:`lock_plan` existed still verify.
+    """
+    from . import run_log
+
+    for entry in reversed(run_log.read_journal(path)):
+        detail = str(entry.get("detail", ""))
+        if entry.get("experiment_id") != experiment_id and experiment_id not in detail:
+            continue
+        digest = entry.get("plan_sha256")
+        if not digest:
+            match = re.search(r"sha256=([0-9a-f]{64})", detail)
+            digest = match.group(1) if match else None
+        if digest:
+            return str(digest)
+    return None
+
+
 def require_val_unread(experiment_id: str, path: Path | None = None) -> None:
     """Refuse a second validation read within one experiment.
 
@@ -517,7 +602,13 @@ def _record_evaluation(
     run_id = results_log.append_run(
         step="evaluate",
         model=model_name,
-        params={"features": features, "val_rows": val_rows},
+        params={
+            "features": features,
+            "val_rows": val_rows,
+            # Says what the score in cv_score actually is, so a row read on its
+            # own needs no step-to-metric table to be understood.
+            "metric": "val",
+        },
         cv_score=score,
         cv_folds=None,
         seed=experiment.seed,
@@ -576,11 +667,10 @@ def close_experiment(
         if not frame.empty and "experiment_id" in frame
         else frame.iloc[0:0]
     )
-    scored = rows.dropna(subset=["cv_score"]) if len(rows) else rows
-    # The evaluate row shares the cv_score column but holds the *validation*
-    # score. Left in, a val read above cv was journaled as best_cv (exp-007).
-    if len(scored):
-        scored = scored[scored["step"] != "evaluate"]
+    # cv_rows drops the evaluate row, which shares the cv_score column but
+    # holds the *validation* score. Left in, a val read above cv was journaled
+    # as best_cv (exp-007).
+    scored = results_log.cv_rows(rows) if len(rows) else rows
     best_cv = float(scored["cv_score"].astype(float).max()) if len(scored) else None
 
     closed = _write(

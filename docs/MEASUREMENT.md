@@ -132,6 +132,39 @@ exp-002 scored val 0.8392 against cv 0.8278 and was the contaminated one.
 
 ---
 
+### Coverage grows with fit size *within a pool*, and not across pools
+
+exp-008 explained its +0.0416 val−cv gap by group-rate coverage: the share of
+held-out rows with a labelled woman-or-child companion grows with the number of
+labelled rows fitted on. Recomputed independently, the claim holds exactly:
+
+| fit rows | held-out rows with a known WCG rate |
+|---:|---:|
+| ~379 (3-fold) | 0.148 |
+| ~455 (5-fold, the CV size) | 0.185 |
+| ~512 (10-fold) | 0.199 |
+| 569 (the val read) | **0.259** |
+
+So any comparison of a group model against a non-group model at the CV training
+size is biased *against* the group model, and val > cv is the expected
+direction. That part is sound, and the 0.259 at the val-read fit size — a number
+exp-008 did not compute — strengthens it.
+
+The extrapolation does not carry to Kaggle, though. Fitted on all 712 labelled
+rows, coverage of the 418 Kaggle test passengers is **0.249** — no better than
+the val read got from 569, because a test passenger's companions are mostly
+*other test passengers*, who carry no labels. Coverage grows with fit size only
+while the held-out rows are drawn from the same pool. The pre-registered
+expectation for the final holdout is fine on this count — it is carved from the
+same 891 — but the submission should not be expected to beat the val number on
+this mechanism.
+
+Checking the mechanism on the holdout itself would mean reading
+`holdout.csv`, which spends the tripwire. So the pre-registration stands
+unaudited until the read, which is the correct trade.
+
+---
+
 ## The adjudicator, measured
 
 Promoting paired repeated CV to "the adjudicator" means promoting an instrument
@@ -168,6 +201,58 @@ because one run holds the fold draw fixed. 750 fits, 42 seconds.
    flip. This is a fact about 569 Titanic rows, not a bug — but it belongs in
    every report that leans on one comparison, which is why
    `PairedResult.describe` always prints the sigma.
+
+### A seed spread is not a standard error
+
+exp-007 added a second denominator and conflated the two. Its winner was
+re-scored on 5 fresh fold seeds, and the sd of the delta **across those seeds**
+(0.0074) was reported as the uncertainty on their **mean**, which is
+`sd/√5 = 0.0033`. `PairedResult.se` returned the sd, so sigma, the 0.003 bar,
+the journal line and `champion.jsonl`'s reason text all divided by a number
+root-5 too large.
+
+Two different questions, two different answers:
+
+| question | denominator | rf_kitchen |
+|---|---|---:|
+| what might *one* fresh seed show? | seed sd | 0.0074 |
+| how well is the seed-*average* pinned? | seed sd / √n_seeds | 0.0033 |
+| how well is it pinned given 569 fixed rows? | per-seed SE (the floor) | **0.0053** |
+
+Fold-draw luck is the one component averaging removes, and it does shrink by
+√n. Row-draw luck does not: the rows are fixed, so no number of seeds learns
+anything more about the population. So neither number alone is the answer —
+**the larger of the two is the floor**, which is what `PairedResult.se` now
+returns, naming which one won and carrying the sd beside it.
+
+The direction was conservative, so no promotion was wrongly granted
+(`rf_kitchen` +0.0163 reads +3.09σ rather than +2.20σ, and
+`without_max_features` fails the bar either way). But the one *inference* drawn
+from the ratio came out backwards. exp-007 recorded, as confirmed:
+
+> the seed sd (0.0074) is ~1.4x the naive SE (0.0053), above the 0.77-1.37x
+> range measured in exp-006 — plausibly because the group rates make fold
+> composition matter more
+
+That compares an sd against an SE. Matched, over 5 seeds on exp-007's own rows:
+
+| arm | seed SE | naive SE | ratio |
+|---|---:|---:|---:|
+| `rf_wcg` | 0.0016 | 0.0042 | **0.39×** |
+| `rf_group` | 0.0022 | 0.0034 | **0.64×** |
+| `rf_kitchen` | 0.0033 | 0.0053 | **0.63×** |
+
+All three sit at or below the bottom of exp-006's range, so the conclusion
+reverses: the group rates make the delta **more** stable across fold draws, not
+less — which is what a feature carrying real signal should do. Superseded in
+`findings.jsonl`; the two affected ledger rows carry a sigma amendment.
+
+A by-product: `rf_wcg`, the arm exp-007's headline rests on, was never
+fresh-seed confirmed, because only the winner is. It confirms at **+0.0158 ±
+0.0016** against +0.0182 on the selection draw. The lever is steadier than it
+was reported to be.
+
+---
 
 ### The quantum, here too
 
@@ -330,6 +415,46 @@ What it does not remove is that two experiments' deltas are still estimated on
 different rows, so they carry the paired SE (~0.003-0.005), not zero. And a
 `Δ champion` reported for the *best* arm is a best-of-N; exp-007's dropped from
 +0.0264 to +0.0163 on fresh fold seeds.
+
+---
+
+### What the champion costs: the val read is no longer independent
+
+The persisted champion buys comparability by carrying a configuration across
+the split boundary. What it spends is the one thing the per-experiment val split
+was built to provide.
+
+The champion's config is **selected** in experiment N, on experiment N's 569
+training rows. Experiment N+1 draws a fresh split from the same 712 — so ~80% of
+its 143 "held back" rows were the rows that did the selecting:
+
+| val rows of | were training rows of | overlap |
+|---|---|---:|
+| exp-007 | exp-006 | 111 / 143 (**78%**) |
+| exp-008 | exp-007 | 116 / 143 (**81%**) |
+| exp-008 | exp-006 | 117 / 143 (**82%**) |
+
+exp-008's val read scored `without_max_features`, an ablation of a champion
+crowned from 20 arms on rows that are 81% of its own validation set. exp-002 was
+*abandoned* for a sharper version of exactly this — members tuned on rows that
+included its own validation split — and the difference here is degree, not kind:
+there it was fully tuned models within one experiment, here it is a 20-arm pick
+plus three hyperparameters from the one before.
+
+This does not break the tripwire. A 0.06-sized defect still shows, because a
+leak or a train/val swap does not care how the config was chosen. It does mean:
+
+- **a cv→val gap cannot be read as evidence about selection**, since part of
+  any positive gap is the selection that saw those rows. exp-008's +0.0416 is
+  the largest recorded and the champion was selected on 81% of the rows;
+- **the independence degrades monotonically.** Every experiment adds selection
+  pressure to the champion, and every new val split is drawn from the same 712.
+  "Rows none of this saw" was true of exp-001 and is not true now.
+
+The fix is the fixed 5-fold partition named in the honest summary below: with
+disjoint blocks, experiment N+1's validation block was never in experiment N's
+training rows. It costs nothing, it does not reach 0.004, and it is still not
+implemented.
 
 ---
 
