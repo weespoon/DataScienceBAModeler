@@ -4,3 +4,4 @@
 {"experiment_id": "exp-006-feature-selection", "model": "random_forest", "run_id": "20261010T203704-9773c4", "score": 0.811189, "timestamp_utc": "2026-10-10T20:37:04+00:00"}
 {"experiment_id": "exp-007-bakeoff", "model": "random_forest", "run_id": "20261011T192034-80371b", "score": 0.853147, "timestamp_utc": "2026-10-11T19:20:34+00:00"}
 {"experiment_id": "exp-008-decompose-champion", "model": "random_forest", "run_id": "20261011T193734-46f101", "score": 0.874126, "timestamp_utc": "2026-10-11T19:37:34+00:00"}
+{"experiment_id": "exp-009-simplify-champion-to-rf-wcg-title-median-age", "model": "random_forest", "run_id": "20261012T130938-13a7b8", "score": 0.853147, "timestamp_utc": "2026-10-12T13:09:38+00:00"}
