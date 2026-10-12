@@ -889,7 +889,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     opener = sub.add_parser("open", help="start a new experiment")
-    opener.add_argument("name")
+    # Prose through the environment, not the shell. `open "$(NAME)"` let a
+    # quote in NAME close the quote and run the rest as a command.
+    opener.add_argument("name", nargs="?", default=None)
+    opener.add_argument("--name-env", default=None, help="env var holding the name")
     opener.add_argument("--seed", type=int, default=None)
     opener.add_argument("--val-frac", type=float, default=0.2)
 
@@ -901,13 +904,18 @@ def main(argv: list[str] | None = None) -> int:
 
     closer = sub.add_parser("close", help="finish the open experiment")
     closer.add_argument("--summary", default="")
+    closer.add_argument("--summary-env", default=None, help="env var holding the summary")
     closer.add_argument("--abandon", action="store_true")
 
     args = parser.parse_args(argv)
 
     try:
         if args.command == "open":
-            experiment = open_experiment(args.name, seed=args.seed, val_frac=args.val_frac)
+            name = os.environ.get(args.name_env, "") if args.name_env else args.name
+            if not (name or "").strip():
+                print('an experiment needs a name: make experiment-open NAME="..."')
+                return 1
+            experiment = open_experiment(name, seed=args.seed, val_frac=args.val_frac)
             print(
                 f"opened {experiment.experiment_id}: "
                 f"{len(experiment.train_ids)} train / {len(experiment.val_ids)} val "
@@ -928,6 +936,8 @@ def main(argv: list[str] | None = None) -> int:
             print("The final test is untouched — that one is read once for the whole programme.")
             return 0
         if args.command == "close":
+            if args.summary_env:
+                args.summary = os.environ.get(args.summary_env, "") or args.summary
             experiment = close_experiment(
                 summary=args.summary, status="abandoned" if args.abandon else "closed"
             )

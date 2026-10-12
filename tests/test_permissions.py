@@ -202,3 +202,109 @@ def test_an_empty_detail_is_refused_rather_than_journaled(monkeypatch, tmp_path)
     monkeypatch.setenv("TITANIC_DETAIL", "   ")
     assert run_log.main(["--record-env", "TITANIC_DETAIL"]) == 1
     assert not os.path.exists(tmp_path / "run_log.jsonl")
+
+
+# --------------------------------------------------------------------------- #
+# make variable injection
+# --------------------------------------------------------------------------- #
+
+
+def expand(target: str, *assignments: str) -> str:
+    """What `make -n <target> VAR=...` would hand to /bin/sh."""
+    import subprocess
+
+    result = subprocess.run(
+        ["make", "-n", target, *assignments],
+        cwd=paths.ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout
+
+
+def test_the_interpreter_cannot_be_replaced_from_the_command_line() -> None:
+    """`make <any target> PYTHON=...` was arbitrary execution.
+
+    A command-line assignment beats a Makefile `:=`, so this turned every
+    allowlisted target into a shell of the caller's choosing -- regardless of
+    which targets an allowlist permitted. `Bash(make champion:*)` is a prefix
+    match, so nothing in .claude/settings.json stood in the way. `override` is
+    the fix, and unlike a Python-side check it also protects a human typing at
+    a terminal.
+    """
+    for variable in ("PYTHON", "BIN", "VENV"):
+        recipe = expand("champion", f"{variable}=echo PWNED")
+        assert "PWNED" not in recipe, f"{variable} still reaches the recipe"
+        assert ".venv/bin/python" in recipe
+
+
+@pytest.mark.parametrize(
+    ("target", "assignment", "flag"),
+    [
+        ("tune", "MODEL=all; echo PWNED", "--model"),
+        ("bakeoff", "ARM_SET=bakeoff; echo PWNED", "--set"),
+        ("bakeoff", "ONLY=a; echo PWNED", "--only"),
+        ("ensemble", "METHOD=soft_vote; echo PWNED", "--method"),
+        ("journal", "LEVEL=info; echo PWNED", "--level"),
+        ("tune", "N_ITER=25; echo PWNED", "--n-iter"),
+        ("agent", "TURNS=60; echo PWNED", "--turns"),
+        ("report", "PASS=x; echo PWNED", "--pass-id"),
+    ],
+)
+def test_a_variable_carrying_a_shell_command_is_emptied(
+    target: str, assignment: str, flag: str
+) -> None:
+    # Empty, not executed: the Python side then refuses a missing argument, so
+    # a bad value fails the command instead of running it.
+    recipe = expand(target, assignment)
+    assert "PWNED" not in recipe, f"{assignment} reached the shell"
+
+
+@pytest.mark.parametrize(
+    ("target", "assignment", "expected"),
+    [
+        ("tune", "MODEL=svc", "--model svc"),
+        ("bakeoff", "ARM_SET=decompose", "--set decompose"),
+        ("bakeoff", "ONLY=rf_wcg,rf_group", "--only rf_wcg,rf_group"),
+        ("journal", "LEVEL=decision", "--level decision"),
+        ("tune", "N_ITER=40", "--n-iter 40"),
+        ("agent", "BUDGET=2.5", "--budget 2.5"),
+    ],
+)
+def test_legitimate_values_still_reach_the_command(
+    target: str, assignment: str, expected: str
+) -> None:
+    # A guard that also blocks the intended use is one someone will remove.
+    # Note the comma-separated list: `safe` takes the variable *name*, so a
+    # comma in the value never hits make's own $(call) argument parser.
+    assert expected in expand(target, assignment)
+
+
+def test_prose_variables_never_reach_a_shell_at_all() -> None:
+    """NAME and SUMMARY hold sentences, so emptying them would be the wrong fix.
+
+    `experiments open "$(NAME)"` let a double quote close the quote early. They
+    now travel in the environment, the same way DETAIL and CLAIM already did --
+    that fix had been applied to three variables and not to these two.
+    """
+    makefile = (paths.ROOT / "Makefile").read_text(encoding="utf-8")
+    assert '"$(NAME)"' not in makefile
+    assert '"$(SUMMARY)"' not in makefile
+    assert "experiment-open: export TITANIC_NAME" in makefile
+    assert "experiment-close: export TITANIC_SUMMARY" in makefile
+
+    recipe = expand("experiment-close", "SUMMARY=held; the bar was not cleared")
+    assert "--summary-env TITANIC_SUMMARY" in recipe
+    # The semicolon is prose here and must not appear as a shell separator.
+    assert "the bar was not cleared" not in recipe
+
+
+def test_a_semicolon_in_a_summary_survives_to_the_process(tmp_path, monkeypatch) -> None:
+    from titanic_agent import experiments
+
+    monkeypatch.setenv("TITANIC_SUMMARY", 'held; "ties" is the honest word')
+    monkeypatch.setattr(paths, "FROZEN_DIR", tmp_path)
+    # No experiment is open, so it fails -- but on the right thing, which proves
+    # the text arrived whole rather than being split or emptied.
+    assert experiments.main(["close", "--summary-env", "TITANIC_SUMMARY"]) == 1
