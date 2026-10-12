@@ -110,6 +110,13 @@ def test_writes_elsewhere_are_untouched(path: str) -> None:
         "truncate -s 0 data/frozen/train.csv",
         "touch data/frozen/marker",
         "sed -i '' s/a/b/ data/frozen/train.csv",
+        # Redirect forms that genuinely write, after the pattern was narrowed
+        # to stop refusing `2>/dev/null`. If any of these starts passing, the
+        # narrowing opened a hole.
+        "echo x >data/frozen/train.csv",
+        "echo x >  data/frozen/train.csv",
+        "cat foo >| data/frozen/train.csv",
+        "echo x > data/frozen/nested/deep.csv",
     ],
 )
 def test_mutating_bash_against_frozen_is_denied(command: str) -> None:
@@ -125,6 +132,14 @@ def test_mutating_bash_against_frozen_is_denied(command: str) -> None:
         "ls -la data/frozen",
         "make verify",
         "wc -l data/frozen/train.csv",
+        # A file-descriptor redirect is not a write. The bare `>` alternation
+        # refused all of these, which is why a reviewer could not even list the
+        # directory while investigating.
+        "ls data/frozen 2>/dev/null",
+        "ls data/frozen/hold*.csv 2>/dev/null",
+        "cat data/frozen/MANIFEST.json 2>&1",
+        "shasum -a 256 data/frozen/*.csv 2>/dev/null | sort",
+        "wc -l < data/frozen/train.csv",
     ],
 )
 def test_reading_frozen_from_bash_is_allowed(command: str) -> None:

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from titanic_agent import agent, findings, paths, run_log
+from titanic_agent import agent, findings, paths, run_log, surface
 
 SETTINGS = paths.ROOT / ".claude" / "settings.json"
 AGENT_SETTINGS = paths.ROOT / ".claude" / "agent-settings.json"
@@ -117,14 +117,7 @@ def test_the_interpreter_lockdown_is_headless_only() -> None:
 
 
 def test_every_make_target_the_run_skill_names_is_allowed() -> None:
-    from tests.test_documented_commands import MAKE_COMMAND, code_fragments, make_targets
-
-    text = SKILL.read_text(encoding="utf-8")
-    named = {
-        match.group(1)
-        for fragment in code_fragments(text)
-        for match in MAKE_COMMAND.finditer(fragment)
-    } & make_targets()
+    named = surface.targets_named_in(SKILL.read_text(encoding="utf-8")) & surface.make_targets()
     # explore and loop are named only to say *not* to run them inside an
     # experiment, so they are deliberately absent from the allowlist.
     expected = named - {"explore", "loop", "pull", "bootstrap"}

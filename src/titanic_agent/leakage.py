@@ -84,6 +84,11 @@ class LeakageCheck:
     passed: bool
     detail: str = ""
     offenders: list[str] = field(default_factory=list)
+    #: The guard could not run, so it is reporting an absence of evidence rather
+    #: than a clean result. ``audit.Check`` has had this since the beginning; a
+    #: guard that cannot run is not a guard that passed, and rendering the two
+    #: identically is how an unverified claim starts reading as a verified one.
+    informational: bool = False
 
 
 def derivable_columns(frozen_dir: Path = paths.FROZEN_DIR) -> set[str]:
@@ -94,12 +99,21 @@ def derivable_columns(frozen_dir: Path = paths.FROZEN_DIR) -> set[str]:
     the moment it is declared in code, because it is derived from data we have
     already sealed. What this cannot see is a join *inside* ``add_derived`` —
     that is what :func:`check_external_reads` is for.
+
+    Returns an empty set when the dataset is not frozen. There is no list of
+    allowed columns before there is a dataset, and raising here took
+    ``make report`` down with it on exactly the pass the run skill says a report
+    matters most for: one that stopped at preflight because nothing was frozen.
+    Callers must treat empty as "cannot vouch", never as "nothing is allowed".
     """
     import pandas as pd
 
     from . import bakeoff, tune
 
-    working = pd.read_csv(Path(frozen_dir) / "train.csv", nrows=5)
+    source = Path(frozen_dir) / "train.csv"
+    if not source.is_file():
+        return set()
+    working = pd.read_csv(source, nrows=5)
     # Columns the bake-off's in-fold transforms produce. Declared in code, built
     # from frozen columns inside each fold; a join would still have to pass
     # check_external_reads to reach them.
@@ -118,6 +132,16 @@ def check_feature_provenance(
         return LeakageCheck("feature provenance", True, "no runs logged yet")
 
     allowed = derivable_columns(frozen_dir)
+    if not allowed:
+        # Not frozen: say so rather than reporting every logged feature as an
+        # offender. An absent dataset is an absence of evidence, and this check
+        # must not turn that into an accusation.
+        return LeakageCheck(
+            "feature provenance",
+            True,
+            "not frozen — no columns to check against, so provenance is UNVERIFIED",
+            informational=True,
+        )
     offenders: set[str] = set()
     for params in frame["params"]:
         if isinstance(params, dict):
@@ -188,6 +212,13 @@ METRIC_BY_STEP: dict[str, str] = {
 def metric_for(step: str) -> str:
     """What kind of score a row of this step carries."""
     return METRIC_BY_STEP.get(str(step), "score")
+
+
+def _mark(check: LeakageCheck) -> str:
+    """How one guard reads in the CLI. A guard that could not run says so."""
+    if check.informational:
+        return "note"
+    return "pass" if check.passed else "FAIL"
 
 
 def check_plausibility(*, log_path: Path | None = None) -> LeakageCheck:
@@ -275,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
 
     checks = check_all()
     for check in checks:
-        print(f"  [{'pass' if check.passed else 'FAIL'}] {check.name:<22} {check.detail}")
+        print(f"  [{_mark(check)}] {check.name:<22} {check.detail}")
         for offender in check.offenders[:5]:
             print(f"         {offender}")
 

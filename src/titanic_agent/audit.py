@@ -235,6 +235,7 @@ def audit(
                 f"rule 4 · {guard.name}",
                 guard.passed,
                 guard.detail + ("" if guard.passed else f" — {guard.offenders[:3]}"),
+                informational=guard.informational,
             )
         )
 

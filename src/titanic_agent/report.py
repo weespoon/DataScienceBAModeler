@@ -31,15 +31,25 @@ from pathlib import Path
 
 from . import paths
 
-#: Verdict stems, in priority order, matched against the closing summary. Stems
-#: rather than whole words because a summary writes "champion holds" and
-#: "crowned rf_kitchen" as readily as the bare verdict.
-VERDICTS: tuple[tuple[str, str], ...] = (
-    ("inconclusive", "inconclusive"),
-    ("abandon", "abandoned"),
-    ("crown", "crowned"),
-    ("hold", "held"),
-    ("refut", "refuted"),
+#: The three words ``.claude/skills/run/SKILL.md`` tells a pass to close with.
+#: A test parametrizes over exactly these, so the matcher and the vocabulary are
+#: checked against each other rather than drifting apart.
+PRESCRIBED: tuple[str, ...] = ("crowned", "held", "inconclusive")
+
+#: Verdict needles, in priority order, matched against the closing summary.
+#: Needles rather than whole words because a summary writes "champion holds"
+#: and "crowned rf_kitchen" as readily as the bare verdict.
+#:
+#: ``held`` has to be listed beside ``hold``: the stem alone caught "holds" and
+#: missed "held", which is the word the skill actually prescribes, so exp-009's
+#: report read "verdict not stated" above a summary beginning "Champion HELD".
+#: Matching an inflected English verb by stem is a trap; enumerate instead.
+VERDICTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("inconclusive",), "inconclusive"),
+    (("abandon",), "abandoned"),
+    (("crown",), "crowned"),
+    (("held", "holds", "hold"), "held"),
+    (("refut",), "refuted"),
 )
 
 
@@ -54,8 +64,8 @@ def _verdict(experiment) -> str:
     if experiment.status != "closed":
         return experiment.status
     summary = (experiment.summary or "").lower()
-    for stem, verdict in VERDICTS:
-        if stem in summary:
+    for needles, verdict in VERDICTS:
+        if any(needle in summary for needle in needles):
             return verdict
     return "closed — verdict not stated in the summary"
 
@@ -76,11 +86,19 @@ def _experiments_for_pass(pass_id: str) -> list[str]:
     return seen
 
 
-def render(pass_id: str | None = None) -> str:
-    """Build the report for one pass. Reads only; writes nothing."""
+def render(pass_id: str | None = None, *, frozen_dir: Path | None = None) -> str:
+    """Build the report for one pass. Reads only; writes nothing.
+
+    ``frozen_dir`` is threaded explicitly rather than left to the callees'
+    defaults: ``audit.audit`` and ``leakage.check_all`` bind
+    ``paths.FROZEN_DIR`` as a default *at import time*, so a test that
+    repoints ``paths.FROZEN_DIR`` afterwards never reaches them -- and the
+    report then cheerfully said "freeze | done" over an empty directory.
+    """
     from . import audit, champion, experiments, leakage, receipts, run_log, runs, status
 
     resolved = pass_id or runs.current_run_id()
+    frozen = paths.FROZEN_DIR if frozen_dir is None else Path(frozen_dir)
     lines = [
         f"# Pass {resolved}",
         "",
@@ -148,7 +166,7 @@ def render(pass_id: str | None = None) -> str:
 
     # ---- did the rules hold ---------------------------------------------- #
     lines += ["## Did the rules hold", ""]
-    report = audit.audit()
+    report = audit.audit(frozen_dir=frozen)
     lines += [
         f"`make audit`: **{'pass' if report.ok else 'FAILED'}** "
         f"({len(report.checks)} checks, {len(report.failures)} binding failure"
@@ -162,7 +180,7 @@ def render(pass_id: str | None = None) -> str:
         lines.append(f"- [{mark}] `{check.name}` — {check.detail}")
     lines.append("")
 
-    guards = leakage.check_all()
+    guards = leakage.check_all(frozen_dir=frozen)
     failed = [g for g in guards if not g.passed]
     lines += [
         f"`make leakage`: **{'pass' if not failed else 'FAILED'}** "
@@ -170,9 +188,8 @@ def render(pass_id: str | None = None) -> str:
         "",
     ]
     for guard in guards:
-        lines.append(
-            f"- [{'pass' if guard.passed else '**FAIL**'}] `{guard.name}` — {guard.detail}"
-        )
+        mark = "note" if guard.informational else ("pass" if guard.passed else "**FAIL**")
+        lines.append(f"- [{mark}] `{guard.name}` — {guard.detail}")
     lines.append("")
 
     # ---- the final test -------------------------------------------------- #
@@ -181,7 +198,7 @@ def render(pass_id: str | None = None) -> str:
         "## The final test",
         "",
         (
-            f"**Unread.** {paths.FROZEN_DIR.name}/holdout.csv has never been scored "
+            f"**Unread.** {frozen.name}/holdout.csv has never been scored "
             "for this dataset, so the one generalisation number is still available."
             if not spent
             else f"**Spent.** {len(spent)} receipt(s): "
@@ -233,13 +250,13 @@ def _plan_state(experiment_id: str) -> str:
     return f"locked, unchanged (`{locked[:12]}`)"
 
 
-def write(pass_id: str | None = None) -> Path:
+def write(pass_id: str | None = None, *, frozen_dir: Path | None = None) -> Path:
     """Write the report into the pass's run directory and publish a copy."""
     from . import runs
 
     resolved = pass_id or runs.current_run_id()
     target = runs.run_dir(resolved) / "report.md"
-    target.write_text(render(resolved) + "\n", encoding="utf-8")
+    target.write_text(render(resolved, frozen_dir=frozen_dir) + "\n", encoding="utf-8")
     runs.publish(target, resolved)
     return target
 

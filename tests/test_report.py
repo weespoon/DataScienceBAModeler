@@ -68,6 +68,7 @@ def test_it_names_the_experiment_the_pass_opened_and_its_verdict(sandbox: Path) 
     [
         ("crowned rf_wcg after all three checks", "crowned"),
         ("champion holds", "held"),
+        ("Champion HELD under the declared rule; the simpler config ties it", "held"),
         ("inconclusive: the instrument could not resolve it", "inconclusive"),
         ("ABANDONED: its val score was contaminated", "abandoned"),
         ("we did some things and some numbers happened", "verdict not stated"),
@@ -82,6 +83,26 @@ def test_the_verdict_is_read_from_the_summary_or_admitted_missing(
     stub = Stub()
     stub.summary = summary
     assert expected in report._verdict(stub)
+
+
+@pytest.mark.parametrize("word", report.PRESCRIBED)
+def test_every_word_the_run_skill_prescribes_is_readable(word: str) -> None:
+    """The matcher and the vocabulary have to be checked against each other.
+
+    VERDICTS matched the stem "hold", which catches "holds" and misses "held" --
+    the word the skill actually asks for. exp-009's report therefore said
+    "verdict not stated" above a summary beginning "Champion HELD". One file
+    named the vocabulary and another could not read it.
+    """
+    skill = (paths.ROOT / ".claude" / "skills" / "run" / "SKILL.md").read_text()
+    assert f"**{word}**" in skill, f"the skill no longer prescribes {word!r}"
+
+    class Stub:
+        status = "closed"
+
+    stub = Stub()
+    stub.summary = f"Champion {word.upper()} after the declared checks"
+    assert report._verdict(stub) == word
 
 
 def test_an_unlocked_plan_is_reported_as_unlocked(sandbox: Path) -> None:
@@ -198,8 +219,8 @@ def test_it_derives_rather_than_restates(sandbox: Path) -> None:
 
     source = inspect.getsource(report)
     for owner in (
-        "audit.audit()",
-        "leakage.check_all()",
+        "audit.audit(frozen_dir=",
+        "leakage.check_all(frozen_dir=",
         "receipts.read_receipts()",
         "status.pipeline_status()",
         "champion.current()",
@@ -246,3 +267,62 @@ def test_replace_keeps_the_dataclass_contract(sandbox: Path) -> None:
     experiment = experiments.current_experiment()
     closed = replace(experiment, status="closed", summary="crowned something")
     assert report._verdict(closed) == "crowned"
+
+
+def test_a_report_can_be_written_when_nothing_is_frozen(tmp_path: Path, monkeypatch) -> None:
+    """The pass this matters most for is the one that stops at preflight.
+
+    `leakage.derivable_columns` read data/frozen/train.csv unguarded, so
+    `make report` raised FileNotFoundError on a checkout with no dataset -- and
+    the run skill says to write the report "even when the pass stopped early;
+    especially then". Cold start 002 hit exactly this.
+    """
+    empty = tmp_path / "frozen"
+    empty.mkdir()
+    monkeypatch.setattr(paths, "FROZEN_DIR", empty)
+    monkeypatch.setattr(paths, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(paths, "REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(paths, "RUN_LOG", tmp_path / "run_log.jsonl")
+    monkeypatch.setattr(paths, "HOLDOUT_READS", tmp_path / "holdout_reads.json")
+    monkeypatch.setenv(runs.RUN_ID_ENV, "20261012-1500EDT")
+    # The provenance guard returns early on an empty ledger, so the crash needs
+    # rows *and* no frozen dir -- the post-unfreeze state, not a fresh clone.
+    results_log.append_run(
+        step="tune", model="random_forest", params={"features": ["Sex"]}, cv_score=0.8
+    )
+
+    written = report.write(frozen_dir=empty)
+    text = written.read_text()
+    assert "Pass 20261012-1500EDT" in text
+    # It must say the dataset is missing rather than crash or claim a pass...
+    assert "holds no manifest" in text
+    assert "**FAILED**" in text
+    # ...and the guard that could not run reads as a note, not a pass. A guard
+    # that cannot run is not a guard that passed.
+    assert "[note] `feature provenance`" in text
+    assert "UNVERIFIED" in text
+
+
+def test_provenance_is_unverified_not_violated_when_nothing_is_frozen(
+    tmp_path: Path, log_path: Path
+) -> None:
+    from titanic_agent import leakage, results_log
+
+    results_log.append_run(
+        step="tune",
+        model="random_forest",
+        params={"features": ["Sex", "Pclass"]},
+        cv_score=0.81,
+        path=log_path,
+    )
+    empty = tmp_path / "frozen"
+    empty.mkdir()
+    assert leakage.derivable_columns(empty) == set()
+
+    check = leakage.check_feature_provenance(log_path=log_path, frozen_dir=empty)
+    # An absent dataset is an absence of evidence. Reporting every logged
+    # feature as an offender would turn that into an accusation.
+    assert check.passed
+    assert "UNVERIFIED" in check.detail
+    assert check.informational
+    assert not check.offenders

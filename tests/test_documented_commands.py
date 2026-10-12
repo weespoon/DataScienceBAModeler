@@ -20,29 +20,23 @@ Two rules, both mechanical:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 
 from titanic_agent import paths
 
-#: `make foo` — only ever inside a code span or fenced block. The first version
-#: of this matched bare prose and flagged "make it", "make an" and "make
-#: cheating impossible", which is the same over-broad-pattern mistake the
-#: data/frozen hook and the explore holdout test each made. A checker that cries
-#: wolf is one nobody runs.
-MAKE_COMMAND = re.compile(r"\bmake\s+([a-z][a-z0-9-]*)")
-
-#: Fenced blocks and inline code spans — the only places a command can live.
-CODE_SPAN = re.compile(r"`([^`\n]+)`")
-CODE_BLOCK = re.compile(r"```[a-z]*\n(.*?)```", re.DOTALL)
-
-#: `make foo --bar` — the shape that silently does not work.
-MAKE_WITH_FLAG = re.compile(r"\bmake\s+[a-z][a-z0-9-]*\s+(--[a-z][a-z0-9-]*)")
-
-#: Variable assignments are fine: `make tune MODEL=svc` works.
-MAKE_WITH_VARIABLE = re.compile(r"\bmake\s+[a-z][a-z0-9-]*\s+[A-Z_]+=")
+#: The regexes and the Makefile parsing live in the package, not here, so a
+#: second runner and the other test module can share them. `test_permissions`
+#: imported them from this module with `from tests.… import …`, which resolves
+#: only when the cwd is on sys.path -- not under `make test`.
+from titanic_agent.surface import (  # noqa: E402
+    MAKE_COMMAND,
+    MAKE_WITH_FLAG,
+    MAKE_WITH_VARIABLE,
+    code_fragments,
+    make_targets,
+)
 
 #: Documents that describe history rather than instruct. A past-tense account of
 #: a command that used to exist must stay accurate to the past.
@@ -53,11 +47,6 @@ HISTORICAL: frozenset[str] = frozenset(
         "cold-start-001-result.md",
     }
 )
-
-
-def code_fragments(text: str) -> list[str]:
-    """Every inline code span and fenced block in a document."""
-    return CODE_SPAN.findall(text) + CODE_BLOCK.findall(text)
 
 
 def documented_files() -> list[Path]:
@@ -75,12 +64,6 @@ def documented_files() -> list[Path]:
                 continue
             found.add(path)
     return sorted(found)
-
-
-def make_targets() -> set[str]:
-    """Every target defined in the Makefile."""
-    text = (paths.ROOT / "Makefile").read_text(encoding="utf-8")
-    return {match.group(1) for match in re.finditer(r"^([a-z][a-z0-9-]*):", text, re.MULTILINE)}
 
 
 def test_the_makefile_has_targets() -> None:

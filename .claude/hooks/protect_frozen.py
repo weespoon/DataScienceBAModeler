@@ -58,7 +58,14 @@ MUTATING = re.compile(
     | \btruncate\b | \bdd\b | \btee\b | \btouch\b | \bln\b
     | \bunlink\b | \brmdir\b | \bmkdir\b | \binstall\b | \bshred\b
     | \bsed\b\s+(-[a-zA-Z]*\s+)*-i | \bperl\b.*\s-i
-    | >> | >
+    # A redirect only mutates when it has a real target. This was a bare
+    # `>> | >`, which denied any command mentioning data/frozen that happened
+    # to contain a redirect -- `ls data/frozen 2>/dev/null` and
+    # `cat data/frozen/MANIFEST.json 2>&1` were both refused as writes. That is
+    # the over-broad-pattern mistake this file's own docstring warns about, and
+    # it cost two reviewers a read before anyone noticed. So: not a file
+    # descriptor duplication (`2>&1`), and not a sink under /dev/.
+    | >>?\s*(?!&)(?!/dev/)\S
     )""",
     re.VERBOSE,
 )
