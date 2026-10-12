@@ -334,6 +334,37 @@ def test_decompose_skips_changes_the_champion_does_not_carry() -> None:
     assert list(arms) == ["champion"]
 
 
+def test_simplify_is_one_challenger_rf_wcg_plus_title_age() -> None:
+    arms = bakeoff.simplify_arms(_kitchen(), champion.INITIAL)
+    assert list(arms) == ["champion", "rf_simple"]
+    earlier = bakeoff.arms_for(champion.INITIAL)
+    wcg = earlier["rf_wcg"].config(earlier)
+    simple = arms["rf_simple"].config(arms)
+    assert simple["features"] == wcg["features"]
+    assert simple["params"] == wcg["params"]
+    assert set(simple["engineer"]) == {"group", "age_by_title"}
+
+
+def test_simplify_without_a_previous_champion_has_no_challenger() -> None:
+    assert list(bakeoff.simplify_arms(champion.INITIAL)) == ["champion"]
+
+
+def test_the_control_borrows_its_arms_when_the_set_lacks_them(
+    sandbox: Path, frozen_dir: Path, log_path: Path
+) -> None:
+    experiments.open_experiment("control", frozen_dir=frozen_dir)
+    result = bakeoff.permutation_control(
+        arms=("rf_group", "rule_wcg"),
+        arm_set="simplify",
+        shuffles=1,
+        folds=2,
+        repeats=1,
+        frozen_dir=frozen_dir,
+        log_path=log_path,
+    )
+    assert set(result.scores) == {"rf_group", "rule_wcg"}
+
+
 def test_dropping_the_last_group_column_drops_the_group_step() -> None:
     config = {"features": ["Sex", "WCGSurvival", "WCGKnown"], "engineer": ["group"]}
     assert bakeoff._without(config, bakeoff.WCG)["engineer"] == []

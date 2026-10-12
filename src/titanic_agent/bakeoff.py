@@ -719,9 +719,48 @@ def decompose_arms(
     return {a.name: a for a in listed}
 
 
+def simplify_arms(
+    champion_config: dict[str, Any], previous_config: dict[str, Any] | None = None
+) -> dict[str, Arm]:
+    """The champion beside the smallest config exp-008 says carries its gain.
+
+    exp-008 found rf_wcg ties rf_kitchen and only title-median Age is measurable
+    among the other four changes, so the parsimony candidate is the previous
+    champion plus the WCG rate plus that imputation. One challenger and no
+    selection: the delta is a measurement, not a best-of-N.
+    """
+    listed = [
+        Arm(
+            "champion",
+            "The reigning champion, re-scored as reference.",
+            champion_config["model"],
+            tuple(champion_config["features"]),
+            dict(champion_config.get("params", {})),
+            tuple(champion_config.get("engineer", ())),
+        )
+    ]
+    if previous_config is not None:
+        earlier = arms_for(previous_config)
+        if "rf_wcg" in earlier:
+            wcg = earlier["rf_wcg"].config(earlier)
+            listed.append(
+                Arm(
+                    "rf_simple",
+                    "Previous champion + WCG rate + title-median Age: rf_kitchen without "
+                    "the three changes exp-008 could not measure. Expected to tie.",
+                    wcg["model"],
+                    tuple(wcg["features"]),
+                    dict(wcg["params"]),
+                    tuple(wcg["engineer"]) + ("age_by_title",),
+                )
+            )
+    return {a.name: a for a in listed}
+
+
 #: Arm sets an experiment can run. ``bakeoff`` is exp-007's breadth search;
-#: ``decompose`` takes the reigning champion apart.
-ARM_SETS: tuple[str, ...] = ("bakeoff", "decompose")
+#: ``decompose`` takes the reigning champion apart; ``simplify`` tests one
+#: parsimony candidate against it.
+ARM_SETS: tuple[str, ...] = ("bakeoff", "decompose", "simplify")
 
 
 def registry_for(arm_set: str, champion_path: Path | None = None) -> dict[str, Arm]:
@@ -735,6 +774,10 @@ def registry_for(arm_set: str, champion_path: Path | None = None) -> dict[str, A
         succession = champion_module.history(champion_path)
         previous = succession[-2].config if len(succession) > 1 else None
         return decompose_arms(reigning.config, previous)
+    if arm_set == "simplify":
+        succession = champion_module.history(champion_path)
+        previous = succession[-2].config if len(succession) > 1 else None
+        return simplify_arms(reigning.config, previous)
     raise ValueError(f"unknown arm set {arm_set!r}; expected one of {ARM_SETS}")
 
 
@@ -1433,7 +1476,9 @@ def permutation_control(
 
     experiment = experiments.current_experiment()
     seed = seed if seed is not None else (experiment.seed if experiment else paths.SEED)
-    registry = registry_for(arm_set, champion_path)
+    # The control tests Engineer, not the arm set. A set that does not carry
+    # the control arms (decompose, simplify) borrows them from the bake-off.
+    registry = {**registry_for("bakeoff", champion_path), **registry_for(arm_set, champion_path)}
     unknown = [a for a in arms if a not in registry]
     if unknown:
         raise ValueError(f"unknown control arms {unknown}; have {sorted(registry)}")
