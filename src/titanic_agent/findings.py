@@ -171,10 +171,51 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Show findings.")
+    # Writing, not only reading. ``findings.jsonl`` is append-only and direct
+    # edits to it are denied, so an unattended pass needs a way to record what
+    # it learned that does not require permission to run arbitrary Python --
+    # which would also be a route to ``--score-holdout``. See ``make finding``.
+    parser.add_argument("--record", default=None, help="append a finding with this claim")
+    # Prose through the environment rather than the shell: see `make finding`.
+    parser.add_argument("--record-env", default=None, help="env var holding the claim")
+    parser.add_argument("--note-env", default=None, help="env var holding the note")
+    parser.add_argument("--as-status", default="untried", choices=STATUSES)
+    parser.add_argument("--evidence", default="", help="comma-separated run_ids")
+    parser.add_argument("--confidence", default="low", choices=CONFIDENCES)
+    parser.add_argument("--delta", default=None, type=float)
+    parser.add_argument("--note", default="")
     parser.add_argument("--experiment", default=None, help="filter to one experiment")
     parser.add_argument("--status", default=None, choices=STATUSES)
     parser.add_argument("--backlog", action="store_true", help="only untried ideas")
     args = parser.parse_args(argv)
+
+    import os
+
+    if args.record_env is not None:
+        args.record = os.environ.get(args.record_env, "")
+    if args.note_env is not None:
+        args.note = os.environ.get(args.note_env, "") or args.note
+    if args.record is not None:
+        if not args.record.strip():
+            print('nothing to record: pass CLAIM="..."')
+            return 1
+        from . import experiments
+
+        open_experiment = experiments.current_experiment()
+        owner = args.experiment or (open_experiment.experiment_id if open_experiment else "")
+        recorded = record(
+            Finding(
+                claim=args.record,
+                status=args.as_status,
+                experiment_id=owner,
+                delta=args.delta,
+                evidence=[e for e in args.evidence.split(",") if e],
+                confidence=args.confidence,
+                note=args.note,
+            )
+        )
+        print(f"recorded [{recorded.status}] {recorded.claim}")
+        return 0
 
     if args.backlog:
         items = backlog()

@@ -64,9 +64,9 @@ expected effect, and which instrument could see an effect that size.
 append-only and nothing retires an item when an experiment happens to answer it.
 `Decompose rf_kitchen` sits there today and exp-008 already did it. So before
 taking an item, check it against `make experiments` and `make findings`. If it is
-already answered: record that with `findings.record(...)` as a confirmed or
-refuted claim citing the experiment that answered it, say so in the report, and
-take the next item instead. Re-running settled work leaves a ledger that looks
+already answered: record that with `make finding` as a confirmed or refuted
+claim citing the experiment that answered it, say so in the report, and take the
+next item instead. Re-running settled work leaves a ledger that looks
 healthy and teaches nothing.
 
 If every item is answered or none is affordable, **stop and ask**. There is no
@@ -87,13 +87,12 @@ document in the repo for this.
 Write the plan and its predictions into `experiments/<id>/plan.md` **before**
 scoring anything, then lock it:
 
-```python
-from titanic_agent import experiments
-experiments.lock_plan()
+```bash
+make experiment-lock-plan
 ```
 
-`make bakeoff` locks it for you, and `make audit` re-hashes every locked plan
-afterwards. A prediction that can be edited once the answer is known is not a
+`make bakeoff` locks it for you, so this is only needed on the `tune` and
+`features` paths. `make audit` re-hashes every locked plan afterwards. A prediction that can be edited once the answer is known is not a
 prediction, which is the only reason scoring predictions is worth doing.
 
 ## 4. Run the search the item calls for
@@ -153,9 +152,18 @@ The verdict is one of:
   common one; dressing it up as either of the others is the dishonesty this repo
   exists to detect.
 
-Record what was learned with `findings.record(...)` — a claim with the `run_id`s
-behind it, never a bare conclusion. A conclusion handed to the next experiment is
-folklore it cannot check.
+Record what was learned — a claim with the `run_id`s behind it, never a bare
+conclusion. A conclusion handed to the next experiment is folklore it cannot
+check.
+
+```bash
+make finding CLAIM="what you now believe" STATUS=confirmed EVIDENCE=<run_id>,<run_id> \
+  CONFIDENCE=medium NOTE="the numbers, and what would overturn it"
+```
+
+`STATUS` is one of `confirmed`, `refuted`, `inconclusive`, `untried`; the first
+two require evidence. Never edit `findings.jsonl` by hand — it is append-only
+and direct writes to it are denied.
 
 ## Budget
 
@@ -184,9 +192,17 @@ Stop and report. Do not push through any of these:
   command that was denied.
 - **You are about to do something this document does not cover.** Ask.
 
-Log the stop reason: `run_log.record("decision", detail="stopped: <reason>")`.
+Log the stop reason:
+
+```bash
+make note EVENT=decision DETAIL="stopped: <reason>"
+```
+
 A pass that stops for a stated reason is a good pass. A pass that stops without
-saying why is indistinguishable from one that crashed.
+saying why is indistinguishable from one that crashed — and the first headless
+pass was exactly that, because the only way to journal was to run arbitrary
+Python and the permission settings denied it. `make note` exists for this; use
+it rather than reaching for an interpreter.
 
 ## Tripwires — refuse, and ask a human
 
@@ -203,10 +219,14 @@ the moment:
    cannot happen by running a pass. An autonomous pass does not take it, however
    settled the champion looks.
 
-On either: `run_log.record("refused", step=..., detail="why you believe it is
-needed")`, then stop and say so. A refusal that leaves no trace is
-indistinguishable from never having considered it — which is why `refused` is an
-event in the journal.
+On either, record the refusal and stop:
+
+```bash
+make note EVENT=refused STEP=ensemble DETAIL="why you believe it is needed"
+```
+
+A refusal that leaves no trace is indistinguishable from never having
+considered it — which is why `refused` is an event in the journal.
 
 ## Not stop conditions
 

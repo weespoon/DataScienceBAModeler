@@ -153,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     # (it is also a route to --score-holdout). So the write is its own entry
     # point, allowlistable on its own.
     parser.add_argument("--record", default=None, help="append one entry with this detail")
+    # Prose through the environment rather than the shell: see `make note`.
+    parser.add_argument("--record-env", default=None, help="env var holding the detail")
     parser.add_argument(
         "--as-event", default="decision", help="event kind for --record (default: decision)"
     )
@@ -170,7 +172,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tail", type=int, default=0, help="show only the last N entries")
     args = parser.parse_args(argv)
 
+    if args.record_env is not None:
+        args.record = os.environ.get(args.record_env, "")
     if args.record is not None:
+        if not args.record.strip():
+            print('nothing to journal: pass DETAIL="..."')
+            return 1
         entry = record(args.as_event, step=args.step or "", detail=args.record)
         print(f"journaled {entry['event']}: {entry['detail']}")
         return 0

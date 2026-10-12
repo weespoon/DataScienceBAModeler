@@ -893,6 +893,9 @@ def main(argv: list[str] | None = None) -> int:
     opener.add_argument("--seed", type=int, default=None)
     opener.add_argument("--val-frac", type=float, default=0.2)
 
+    locker = sub.add_parser("lock-plan", help="journal the hash of this experiment's plan.md")
+    locker.add_argument("--experiment", default=None)
+
     evaluator = sub.add_parser("evaluate", help="score the open experiment's val split, once")
     evaluator.add_argument("--run-id", default=None, help="pre-declared ledger row to score")
 
@@ -911,6 +914,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"(seed {experiment.seed})"
             )
             write_index()
+            return 0
+        if args.command == "lock-plan":
+            digest = lock_plan(args.experiment)
+            print(f"plan locked: sha256={digest}")
             return 0
         if args.command == "evaluate":
             experiment = evaluate(run_id=args.run_id)

@@ -55,6 +55,20 @@ DEFAULT_BUDGET_USD: float = 5.0
 #: ``bypassPermissions``.
 PERMISSION_MODE: str = "acceptEdits"
 
+#: Extra deny rules that apply to a *headless* pass only, merged on top of the
+#: project settings (``--settings`` loads additional settings; it does not
+#: replace, so the Rule 1 hook stays).
+#:
+#: Why these are not in ``.claude/settings.json``: they ban the interpreters
+#: (``python``, ``uv run``), the network and the git mutations. That is right for
+#: an unattended pass, where ``python -c`` is a route to anything including
+#: ``--score-holdout``. It is wrong for an interactive session, where a person
+#: is watching and the tripwires are explicitly theirs to decide — and a rule
+#: that makes the repo tedious to work in is a rule that gets switched off.
+#: Rules that help in both places (``chmod``, ``holdout.csv``, the append-only
+#: files) live in the project settings instead.
+AGENT_SETTINGS: str = ".claude/agent-settings.json"
+
 PROMPT: str = """\
 Run one autonomous pass of this repository.
 
@@ -92,6 +106,8 @@ def build_command(*, turns: int, budget: float, prompt: str = PROMPT) -> list[st
         str(budget),
         "--permission-mode",
         PERMISSION_MODE,
+        "--settings",
+        AGENT_SETTINGS,
         "--output-format",
         "json",
     ]

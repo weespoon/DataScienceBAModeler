@@ -23,12 +23,10 @@ OUTER_FOLDS ?= 5
 # TURNS, reasoning expensively hits BUDGET.
 TURNS ?= 60
 BUDGET ?= 5
-# Quoted so `make note DETAIL="a sentence with spaces"` survives the shell.
-DETAIL_Q = '$(DETAIL)'
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune features ensemble \
-	nested bakeoff bakeoff-decide permutation champion submit test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary note agent bootstrap loop clean distclean
+	nested bakeoff bakeoff-decide permutation champion submit test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-lock-plan experiment-evaluate experiment-close finding findings backlog runs summary note agent bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -162,8 +160,12 @@ JOURNAL_ARGS ?= --tail 20
 # Writing to the journal, so an unattended pass can record why it stopped
 # without needing permission to run arbitrary Python. A pass that stops without
 # saying why is indistinguishable from one that crashed.
+# The text goes through the environment, not the shell. `DETAIL_Q = '$(DETAIL)'`
+# broke on the first apostrophe, and a journal writer that cannot take prose is
+# one an agent will work around.
+note: export TITANIC_DETAIL := $(DETAIL)
 note: setup ## Append a journal entry: make note DETAIL="..." EVENT=decision STEP=tune
-	@$(PYTHON) -m titanic_agent.run_log --record $(DETAIL_Q) \
+	@$(PYTHON) -m titanic_agent.run_log --record-env TITANIC_DETAIL \
 		$(if $(EVENT),--as-event $(EVENT)) $(if $(STEP),--step $(STEP))
 
 journal: setup ## Agent journal. Options: LEVEL=decision PASS=<run id> ALL=1
@@ -188,11 +190,27 @@ experiments: setup ## List every experiment and its scores
 experiment-open: setup ## Start an experiment: make experiment-open NAME="wide search"
 	@$(PYTHON) -m titanic_agent.experiments open "$(NAME)"
 
+# Journal the hash of plan.md before anything is scored. `make bakeoff` does
+# this itself; tune and features need it run by hand, and `make audit` re-checks
+# every locked plan afterwards.
+experiment-lock-plan: setup ## Lock this experiment's plan.md before scoring
+	@$(PYTHON) -m titanic_agent.experiments lock-plan $(if $(EXPERIMENT),--experiment $(EXPERIMENT),)
+
 experiment-evaluate: setup ## Score the open experiment's val split, ONCE. Options: RUN=<run id>
 	@$(PYTHON) -m titanic_agent.experiments evaluate $(if $(RUN),--run-id $(RUN))
 
 experiment-close: setup ## Close the open experiment: make experiment-close SUMMARY="..."
 	@$(PYTHON) -m titanic_agent.experiments close --summary "$(SUMMARY)"
+
+# Writing to findings.jsonl, which is append-only and whose direct edits are
+# denied. Same reason as `make note`: an unattended pass has to record what it
+# learned without permission to run arbitrary Python.
+finding: export TITANIC_CLAIM := $(CLAIM)
+finding: export TITANIC_NOTE := $(NOTE)
+finding: setup ## Record a finding: make finding CLAIM="..." STATUS=confirmed EVIDENCE=id1,id2
+	@$(PYTHON) -m titanic_agent.findings --record-env TITANIC_CLAIM --note-env TITANIC_NOTE \
+		$(if $(STATUS),--as-status $(STATUS)) $(if $(EVIDENCE),--evidence $(EVIDENCE)) \
+		$(if $(CONFIDENCE),--confidence $(CONFIDENCE)) $(if $(DELTA),--delta $(DELTA))
 
 findings: setup ## What we have learned, and what is still untried
 	@$(PYTHON) -m titanic_agent.findings
