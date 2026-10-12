@@ -278,3 +278,19 @@ the pass stopped early; especially then.
 
 Nothing retries a pass. Re-running one whose verdict you disliked is selecting
 on the outcome.
+
+**A second runner is planned, so the surface is declared in the package.**
+`titanic_agent.surface` says which targets a runner may run and what values
+their variables accept; `titanic_agent.guard` holds Rule 1 and Rule 2 as
+decisions any runner can call, and the `PreToolUse` hook loads it. Claude Code's
+`.claude/settings.json` is *asserted against* those, not the only copy of them
+— a Claude Agent SDK runner inherits the settings and the hook, a raw Messages
+API loop inherits neither. If you add a make target, classify it in
+`surface.ALLOWED` or `surface.FORBIDDEN` with a reason, or the suite fails.
+`docs/TWO-RUNNERS.md` has the contract and the confounds.
+
+**Options to `make` are validated, not just named.** `make <target>
+PYTHON=...` was arbitrary execution until the Makefile gained `override`,
+`$(filter)` whitelists and a numeric guard; `NAME` and `SUMMARY` travel in the
+environment so prose never reaches a shell. Do not loosen those to make a value
+go through — a value the guard empties is a value the command should refuse.
