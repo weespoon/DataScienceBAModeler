@@ -79,6 +79,7 @@ make runs      # every pass and what it left behind
 ```bash
 make agent              # one experiment, start to finish, unattended
 make agent TURNS=90     # options are variables, never flags
+make report             # the pass in one page: verdict, rules, receipts
 ```
 
 `make agent` launches `claude -p` pointed at `.claude/skills/run/SKILL.md`,

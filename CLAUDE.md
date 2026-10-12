@@ -270,5 +270,11 @@ a journal entry, so a pass can record why it stopped without needing permission
 to run arbitrary Python — the first headless pass could not, and a pass that
 stops without saying why is indistinguishable from one that crashed.
 
+Every pass ends with `make report` — `runs/<pass id>/report.md` plus a copy in
+`reports/`, holding the experiment and its verdict, whether its plan still
+hashes to what was locked, the champion, `make audit` and `make leakage` check
+by check, the receipts, and the pass's decisions and refusals. Run it even when
+the pass stopped early; especially then.
+
 Nothing retries a pass. Re-running one whose verdict you disliked is selecting
 on the outcome.

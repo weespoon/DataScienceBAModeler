@@ -165,6 +165,26 @@ make finding CLAIM="what you now believe" STATUS=confirmed EVIDENCE=<run_id>,<ru
 two require evidence. Never edit `findings.jsonl` by hand — it is append-only
 and direct writes to it are denied.
 
+## 7. Write the report, always
+
+```bash
+make report
+```
+
+One page in `runs/<pass id>/report.md`, with a copy in `reports/`: the
+experiment and its verdict, whether its plan was locked and still hashes the
+same, the champion and its delta, `make audit` and `make leakage` check by
+check, the holdout receipts, and what the pass decided or refused. Every number
+in it is read from the module that owns it, so it cannot disagree with the
+ledger.
+
+**Run it even when the pass stopped early** — especially then. A pass that
+stopped at preflight and wrote a report saying so is legible; one that stopped
+and wrote nothing is indistinguishable from a crash.
+
+`make summary` writes `runs/<pass id>/run.md` as well, which is this pass's
+scores and events rather than its verdict. Run both.
+
 ## Budget
 
 - **One experiment per pass. Stop when it closes.** Not two, not "one more while
@@ -274,6 +294,7 @@ something you did not want to hear.
 - [ ] `make verify`, `make audit` and `make leakage` all pass at the end.
 - [ ] Holdout receipts: zero, or exactly one for this `frozen_sha256`.
 - [ ] The stop reason is in the journal.
+- [ ] `make report` has been run and `runs/<pass id>/report.md` exists.
 
 ## Reporting
 
@@ -287,7 +308,8 @@ Finish with a short summary a human can read without opening anything:
 - anything surprising — especially results that went the wrong way, and
   predictions in `plan.md` that were wrong.
 
-Then print `make log` and `make journal LEVEL=decision`.
+Then print `make log` and `make journal LEVEL=decision`, and point at
+`reports/report.md` — the one page that holds all of the above together.
 
 Each pass also writes `runs/<id>/run.md` via `make summary` — scores, decisions,
 refusals and artifacts for that pass alone, derived from the global ledger and

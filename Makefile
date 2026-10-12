@@ -26,7 +26,7 @@ BUDGET ?= 5
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune features ensemble \
-	nested bakeoff bakeoff-decide permutation champion submit test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-lock-plan experiment-evaluate experiment-close finding findings backlog runs summary note agent bootstrap loop clean distclean
+	nested bakeoff bakeoff-decide permutation champion submit test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-lock-plan experiment-evaluate experiment-close finding findings backlog runs summary report note agent bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -141,6 +141,13 @@ loop: explore tune ensemble ## Steps 5-7, repeatable: the autonomous iterate loo
 # are what stop a pass reaching chmod on data/frozen or --score-holdout.
 agent: setup ## One autonomous pass via the run skill. Options: TURNS=60 BUDGET=5
 	@$(PYTHON) -m titanic_agent.agent --turns $(TURNS) --budget $(BUDGET)
+
+# One page per pass, for a human who was not watching: the experiment and its
+# verdict, the champion, whether the rules held, the receipts, and what the pass
+# decided or refused. Derived from the modules that own those facts, so it
+# cannot disagree with them. Charges no budget -- `make summary` is the counter.
+report: setup ## This pass in one page. Options: PASS=<run id>
+	@$(PYTHON) -m titanic_agent.report $(if $(PASS),--pass-id $(PASS),)
 
 runs: setup ## List every pass and how many artifacts it left
 	@$(PYTHON) -m titanic_agent.runs
