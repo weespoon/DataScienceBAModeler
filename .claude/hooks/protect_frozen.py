@@ -37,8 +37,8 @@ import annotations`` is what makes the modern type syntax below safe there.
 
 from __future__ import annotations
 
+import importlib.util
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -47,80 +47,25 @@ ROOT = Path(__file__).resolve().parents[2]
 FROZEN = ROOT / "data" / "frozen"
 MANIFEST = FROZEN / "MANIFEST.json"
 
-#: Tools whose target is a structured file path we can check exactly.
-PATH_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
-#: Shell tokens that indicate intent to modify rather than read. Checked only
-#: when the command also mentions data/frozen, so `rm -rf build` is unaffected.
-MUTATING = re.compile(
-    r"""(
-      \brm\b | \bmv\b | \bcp\b | \bchmod\b | \bchown\b | \bchflags\b
-    | \btruncate\b | \bdd\b | \btee\b | \btouch\b | \bln\b
-    | \bunlink\b | \brmdir\b | \bmkdir\b | \binstall\b | \bshred\b
-    | \bsed\b\s+(-[a-zA-Z]*\s+)*-i | \bperl\b.*\s-i
-    # A redirect only mutates when it has a real target. This was a bare
-    # `>> | >`, which denied any command mentioning data/frozen that happened
-    # to contain a redirect -- `ls data/frozen 2>/dev/null` and
-    # `cat data/frozen/MANIFEST.json 2>&1` were both refused as writes. That is
-    # the over-broad-pattern mistake this file's own docstring warns about, and
-    # it cost two reviewers a read before anyone noticed. So: not a file
-    # descriptor duplication (`2>&1`), and not a sink under /dev/.
-    | >>?\s*(?!&)(?!/dev/)\S
-    )""",
-    re.VERBOSE,
-)
+def _load_guard():
+    """Load ``src/titanic_agent/guard.py`` by path, not as a package import.
 
-#: How the frozen directory might be named in a shell command.
-MENTIONS_FROZEN = re.compile(r"data/frozen|data\\frozen")
-
-#: Heredoc introducer, e.g. ``<<'EOF'`` or ``<<-EOF``.
-HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?")
-
-#: Message arguments: text that *describes*, never a path that gets mutated.
-MESSAGE_ARG = re.compile(
-    r"""(?:-m|--message)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)""",
-    re.VERBOSE,
-)
-
-#: git commands that delete *ignored* files, and so can wipe data/frozen without
-#: ever naming it. Everything under data/frozen is gitignored, which is exactly
-#: why no ordinary git command can touch it — and why these two can.
-DANGEROUS_GIT = re.compile(
-    r"""(
-      \bgit\b[^|;&]*\bclean\b[^|;&]*-[a-zA-Z]*[xX]
-    | \bgit\b[^|;&]*\bstash\b[^|;&]*(--all|\s-\w*a)
-    )""",
-    re.VERBOSE,
-)
-
-
-def _strip_prose(command: str) -> str:
-    """Remove text that is a *message* rather than a command target.
-
-    Heredoc bodies and ``-m``/``--message`` arguments carry prose: a commit
-    message describing this very rule should not be read as an attempt to break
-    it. Learned the hard way — this hook denied the commit that introduced it,
-    and the tempting fix was to reword the message rather than the pattern.
-
-    Quoted strings in general are *not* stripped: ``rm -rf "data/frozen"`` is a
-    real attempt and must still be caught.
+    By path on purpose. ``import titanic_agent.guard`` would execute
+    ``titanic_agent/__init__.py`` first, and the day someone adds a convenience
+    import there — ``from . import paths`` reaching pandas, say — this hook
+    would raise under the system interpreter. It fails **open** (``main`` calls
+    ``allow()`` on bad input and always exits 0), so Rule 1 would quietly stop
+    being enforced with nothing to notice it. Loading one stdlib-only file keeps
+    the constraint a property of that file.
     """
-    # Heredoc bodies: drop everything between the introducer's newline and the
-    # terminator line.
-    while (match := HEREDOC.search(command)) is not None:
-        delimiter = match.group(1)
-        body_start = command.find("\n", match.end())
-        if body_start == -1:
-            command = command[: match.start()]
-            break
-        remainder = command[body_start:]
-        terminator = re.search(rf"^{re.escape(delimiter)}\s*$", remainder, re.MULTILINE)
-        if terminator is None:
-            command = command[:body_start]
-            break
-        command = command[: match.start()] + remainder[terminator.end() :]
-
-    return MESSAGE_ARG.sub(" ", command)
+    source = ROOT / "src" / "titanic_agent" / "guard.py"
+    spec = importlib.util.spec_from_file_location("_titanic_guard", source)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load the Rule 1 policy from {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 DENY_REASON = (
@@ -156,55 +101,38 @@ def deny(detail: str) -> None:
     sys.exit(0)
 
 
-def targets_frozen(raw_path: str, root: Path = ROOT) -> bool:
-    """True when ``raw_path`` resolves to somewhere inside ``<root>/data/frozen/``."""
-    if not raw_path:
-        return False
-    candidate = Path(raw_path).expanduser()
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    frozen = root / "data" / "frozen"
-    try:
-        resolved = candidate.resolve()
-        # Resolve the frozen dir too, so a symlink pointing into it is caught.
-        frozen = frozen.resolve()
-    except (OSError, RuntimeError):
-        return False
-    return resolved == frozen or frozen in resolved.parents
+_guard = _load_guard()
+MUTATING = _guard.MUTATING
 
 
 def decide(payload: dict, *, is_frozen: bool, root: Path = ROOT) -> str | None:
-    """Return a deny reason, or None to allow.
+    """This hook's root, applied to the shared policy in ``guard.decide``.
 
-    Pure: every input is an argument, so the policy can be tested without a
-    frozen dataset on disk and without an environment-variable override — an
-    override would itself be a way around the hook.
+    ``guard.decide`` takes ``root`` explicitly and on purpose: this file derives
+    it from ``.claude/hooks/../..`` while ``paths.ROOT`` derives it from
+    ``src/titanic_agent/../..``. Same answer today, two ways to be wrong later.
+    The default belongs here, where the root is known, not there.
     """
-    # The gate: before the first freeze there is nothing to protect, and the
-    # authorized writer has to get through. This is the same signal
-    # freeze.is_frozen() reads, by design — one invariant, one place.
-    if not is_frozen:
-        return None
+    return _guard.decide(payload, is_frozen=is_frozen, root=root)
 
-    tool = payload.get("tool_name", "")
-    tool_input = payload.get("tool_input") or {}
 
-    if tool in PATH_TOOLS:
-        path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
-        if targets_frozen(str(path), root):
-            return f"{tool} -> {path}"
-        return None
+def targets_frozen(raw_path: str, root: Path = ROOT) -> bool:
+    """See :func:`guard.targets_frozen`."""
+    return _guard.targets_frozen(raw_path, root)
 
-    if tool == "Bash":
-        raw = str(tool_input.get("command") or "")
-        command = _strip_prose(raw)
-        if DANGEROUS_GIT.search(command):
-            return f"Bash (deletes ignored files, which is all of data/frozen) -> {raw[:160]}"
-        if MENTIONS_FROZEN.search(command) and MUTATING.search(command):
-            return f"Bash -> {raw[:160]}"
-        return None
 
-    return None
+def read_refusal(raw_path: str, root: Path = ROOT) -> str | None:
+    """Rule 2. See :func:`guard.read_refusal`."""
+    return _guard.read_refusal(raw_path, root)
+
+
+def write_refusal(raw_path: str, root: Path = ROOT) -> str | None:
+    """Rule 1 and Rule 3. See :func:`guard.write_refusal`."""
+    return _guard.write_refusal(raw_path, root)
+
+
+DANGEROUS_GIT = _guard.DANGEROUS_GIT
+PATH_TOOLS = _guard.PATH_TOOLS
 
 
 def main() -> None:

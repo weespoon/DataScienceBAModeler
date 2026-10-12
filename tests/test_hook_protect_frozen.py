@@ -19,6 +19,11 @@ Two properties matter most:
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -220,3 +225,69 @@ def test_decide_is_pure_and_takes_no_env_override() -> None:
     source = HOOK_PATH.read_text(encoding="utf-8")
     assert "os.environ" not in source, "an env override would be a way around the hook"
     assert set(inspect.signature(hook.decide).parameters) == {"payload", "is_frozen", "root"}
+
+
+# --------------------------------------------------------------------------- #
+# the shim, under the interpreter the harness actually uses
+# --------------------------------------------------------------------------- #
+
+
+def _run_hook_bare(payload: dict) -> subprocess.CompletedProcess:
+    """Run the hook as the harness does: system python3, no venv, no PYTHONPATH.
+
+    Every other test in this file calls ``decide()`` in-process, which never
+    touches the parts that talk to the harness. That gap let a refactor break
+    the deny path while all 56 of them stayed green.
+    """
+    environment = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")}
+    return subprocess.run(
+        ["/usr/bin/python3", str(HOOK_PATH)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+
+
+@pytest.mark.skipif(not Path("/usr/bin/python3").exists(), reason="no system python3")
+def test_the_hook_denies_under_a_bare_interpreter() -> None:
+    """The constraint the guard move could have broken silently.
+
+    The policy now lives in ``src/titanic_agent/guard.py``, loaded by path so
+    ``titanic_agent/__init__.py`` never runs. If that import ever fails under
+    the system interpreter the hook raises, and because it fails **open** —
+    ``main`` calls ``allow()`` on bad input and exits 0 — Rule 1 would stop
+    being enforced with nothing to notice.
+
+    This caught a real break: the refactor dropped ``DENY_REASON``, so the deny
+    path raised ``NameError`` and the hook exited 1 with a traceback instead of
+    denying the write.
+    """
+    result = _run_hook_bare({"tool_name": "Write", "tool_input": {"file_path": "data/frozen/x"}})
+    assert result.returncode == 0, f"the hook must never wedge the session: {result.stderr}"
+    assert not result.stderr, result.stderr
+    decision = json.loads(result.stdout)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "Rule 1" in decision["permissionDecisionReason"]
+
+
+@pytest.mark.skipif(not Path("/usr/bin/python3").exists(), reason="no system python3")
+def test_the_hook_allows_elsewhere_under_a_bare_interpreter() -> None:
+    result = _run_hook_bare({"tool_name": "Write", "tool_input": {"file_path": "reports/x.md"}})
+    assert result.returncode == 0
+    assert "permissionDecision" not in result.stdout
+
+
+def test_the_policy_file_imports_nothing_outside_the_stdlib() -> None:
+    """``guard.py`` is loaded by the system interpreter, which has no pandas.
+
+    Also: no ``from . import paths``. The hook derives the repo root from
+    ``.claude/hooks/../..`` and ``paths.ROOT`` derives it from
+    ``src/titanic_agent/../..`` -- the same answer today and two ways to be
+    wrong later, which is why root is a parameter.
+    """
+    source = (Path(hook.ROOT) / "src" / "titanic_agent" / "guard.py").read_text(encoding="utf-8")
+    imported = set(re.findall(r"^(?:from|import)\s+([\w.]+)", source, re.MULTILINE))
+    assert imported <= {"__future__", "re", "pathlib"}, imported
+    assert "from . import" not in source
