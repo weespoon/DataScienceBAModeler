@@ -115,13 +115,19 @@ def test_the_transcript_and_the_metadata_land_in_the_run_directory(
     agent.run(turns=7, budget=1)
 
     directory = runs.list_runs()[0]
-    # agent.json is what makes "it ran out of turns before closing" checkable
-    # rather than inferred from a truncated transcript.
-    assert json.loads((directory / "agent.json").read_text())["num_turns"] == 7
-    assert "two tool calls denied" in (directory / "agent.log").read_text()
-    assert (directory / "agent.stderr.log").read_text() == "a warning"
+    # The normalised record is what makes "it ran out of turns before closing"
+    # checkable, and comparable across runners rather than only within one.
+    record = json.loads((directory / "claude-code.json").read_text())
+    assert record["runner"] == "claude-code"
+    assert record["turns"] == 7 and record["turn_cap"] == 7
+    assert record["cost_usd"] == 0.42
+    assert record["stop_reason"] == "success"
+    # The CLI's own output is kept beside it, un-normalised.
+    assert json.loads((directory / "claude-code.raw.json").read_text())["num_turns"] == 7
+    assert "two tool calls denied" in (directory / "claude-code.log").read_text()
+    assert (directory / "claude-code.stderr.log").read_text() == "a warning"
     meta = json.loads((directory / "metadata.json").read_text())
-    assert meta["launched_by"] == "make agent"
+    assert meta["launched_by"] == "claude-code"
     assert meta["turn_cap"] == 7
 
 
@@ -156,9 +162,26 @@ def test_a_failed_pass_is_journaled_as_failed_and_not_retried(sandbox: Path, mon
     assert "error_max_turns" in detail
 
 
-def test_spend_does_not_invent_missing_fields() -> None:
+def test_a_field_the_cli_did_not_report_stays_none() -> None:
     # A cap nobody counts is a number pretending to be a limit; a count nobody
-    # measured is worse.
-    assert agent._spend(json.dumps({"num_turns": 3})) == "turns=3"
-    assert agent._spend("not json") == "no result metadata"
-    assert agent._spend("") == "no result metadata"
+    # measured is worse. None means "not measured", never zero.
+    class Completed:
+        returncode = 0
+        stdout = json.dumps({"num_turns": 3})
+        stderr = ""
+
+    record = agent._record("20261012-1600EDT", Completed(), turns=10, budget=1.0)
+    assert record.turns == 3
+    assert record.cost_usd is None
+    assert record.duration_ms is None
+    assert record.stop_reason is None
+    assert record.hit_the_cap is False
+
+    class Garbage:
+        returncode = 1
+        stdout = "not json"
+        stderr = ""
+
+    blank = agent._record("20261012-1600EDT", Garbage(), turns=10, budget=1.0)
+    assert blank.turns is None
+    assert blank.hit_the_cap is None  # unmeasured, not "did not hit it"

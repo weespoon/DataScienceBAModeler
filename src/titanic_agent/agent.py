@@ -36,7 +36,7 @@ import shutil
 import subprocess
 import sys
 
-from . import paths, runs
+from . import paths, runner, runs
 
 #: The pass's turn cap. A turn is one model response, so this bounds how long an
 #: unattended pass can run without bounding what it is allowed to conclude.
@@ -53,6 +53,10 @@ DEFAULT_BUDGET_USD: float = 5.0
 #: Edits are auto-approved; Bash goes through the allowlist and deny rules in
 #: ``.claude/settings.json``. See the module docstring on why not
 #: ``bypassPermissions``.
+#: This runner's name. It names the record file (runs/<id>/claude-code.json)
+#: and the launched_by field, so a comparison can tell them apart.
+RUNNER: str = "claude-code"
+
 PERMISSION_MODE: str = "acceptEdits"
 
 #: Extra deny rules that apply to a *headless* pass only, merged on top of the
@@ -69,29 +73,9 @@ PERMISSION_MODE: str = "acceptEdits"
 #: files) live in the project settings instead.
 AGENT_SETTINGS: str = ".claude/agent-settings.json"
 
-PROMPT: str = """\
-Run one autonomous pass of this repository.
-
-Read CLAUDE.md and then .claude/skills/run/SKILL.md, and follow that skill as
-written. It is the policy for a pass; the other skills are procedures for single
-steps.
-
-In short: preflight, pick exactly one item from `make backlog` and say why, open
-an experiment, write and lock its plan.md with predictions before scoring
-anything, run the search the item calls for, read the validation split exactly
-once, and close the experiment with an honest verdict.
-
-One experiment. Stop when it closes.
-
-Do not read data/frozen/holdout.csv and do not run ensemble with
---score-holdout: that is the second tripwire and it is a human's call. If you
-believe a pass needs something this repo's rules forbid, record the refusal in
-the journal and stop.
-
-If a tool call is denied by the permission settings, that is a stop condition.
-Report which command was denied rather than looking for another route to the
-same thing.
-"""
+#: One copy, in runner.py, so a comparison between runners is not partly a
+#: comparison of prompts.
+PROMPT = runner.PROMPT
 
 
 def build_command(*, turns: int, budget: float, prompt: str = PROMPT) -> list[str]:
@@ -135,7 +119,6 @@ def run(
     The ledger and the journal remain the authority on what the pass *did*;
     these two say what the pass *was*.
     """
-    from . import run_log
 
     if shutil.which("claude") is None:
         print(
@@ -151,18 +134,13 @@ def run(
         print(" ".join(command))
         return 0
 
-    resolved = run_id or runs.mint_run_id()
+    resolved = run_id or runner.start(
+        RUNNER, turn_cap=turns, budget_usd=budget, permission_mode=PERMISSION_MODE
+    )
     directory = runs.run_dir(resolved)
-    runs.write_metadata(resolved, launched_by="make agent", turn_cap=turns, budget_usd=budget)
 
     # Exported so every tool call inside the pass agrees on one run directory.
     environment = {**os.environ, runs.RUN_ID_ENV: resolved}
-    run_log.record(
-        "step_started",
-        step="agent",
-        detail=f"headless pass: {turns} turns, ${budget} cap, {PERMISSION_MODE}",
-        pass_id=resolved,
-    )
     print(f"pass {resolved} -> {_shown(directory)}/")
 
     completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
@@ -174,21 +152,42 @@ def run(
         check=False,
     )
 
-    (directory / "agent.json").write_text(completed.stdout or "", encoding="utf-8")
     summary = _final_message(completed.stdout)
-    (directory / "agent.log").write_text(summary, encoding="utf-8")
-    if completed.stderr:
-        (directory / "agent.stderr.log").write_text(completed.stderr, encoding="utf-8")
-
-    run_log.record(
-        "step_finished" if completed.returncode == 0 else "step_failed",
-        step="agent",
-        detail=f"headless pass exited {completed.returncode}; {_spend(completed.stdout)}",
-        pass_id=resolved,
+    written = runner.finish(
+        _record(resolved, completed, turns=turns, budget=budget),
+        raw=completed.stdout or "",
+        summary=summary,
     )
+    if completed.stderr:
+        (directory / f"{RUNNER}.stderr.log").write_text(completed.stderr, encoding="utf-8")
+
     print(summary or "(the pass produced no final message)")
-    print(f"\ntranscript: {_shown(directory / 'agent.json')}")
+    print(f"\nrecord: {_shown(written)}  raw: {_shown(directory / f'{RUNNER}.raw.json')}")
     return completed.returncode
+
+
+def _record(pass_id: str, completed, *, turns: int, budget: float) -> runner.PassRecord:
+    """The Claude CLI's result, in the shape every runner reports.
+
+    The CLI's own names (``num_turns``, ``total_cost_usd``, ``subtype``) differ
+    from the SDK's ``ResultMessage`` fields and from whatever a raw loop
+    computes. Translating here, once per runner, is what gives the three a
+    common denominator. A field the CLI did not report stays None rather than
+    becoming 0 -- a count nobody measured is worse than a cap nobody counted.
+    """
+    payload = _payload(completed.stdout)
+    return runner.PassRecord(
+        runner=RUNNER,
+        pass_id=pass_id,
+        exit_code=completed.returncode,
+        turns=payload.get("num_turns"),
+        turn_cap=turns,
+        cost_usd=payload.get("total_cost_usd"),
+        budget_usd=budget,
+        duration_ms=payload.get("duration_ms"),
+        stop_reason=payload.get("subtype"),
+        extra={"permission_mode": PERMISSION_MODE, "settings": AGENT_SETTINGS},
+    )
 
 
 def _shown(path) -> str:
@@ -215,21 +214,6 @@ def _final_message(stdout: str | None) -> str:
     if isinstance(result, str) and result.strip():
         return result
     return (stdout or "").strip()
-
-
-def _spend(stdout: str | None) -> str:
-    """What the pass cost, for the journal line. Absent fields are not faked."""
-    payload = _payload(stdout)
-    parts = []
-    for key, label in (
-        ("num_turns", "turns"),
-        ("total_cost_usd", "usd"),
-        ("duration_ms", "ms"),
-        ("subtype", "stop"),
-    ):
-        if payload.get(key) is not None:
-            parts.append(f"{label}={payload[key]}")
-    return ", ".join(parts) or "no result metadata"
 
 
 def main(argv: list[str] | None = None) -> int:
