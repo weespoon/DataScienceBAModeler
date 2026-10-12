@@ -18,10 +18,17 @@ MODEL ?= all
 METHOD ?= soft_vote
 TOP_K ?= 4
 OUTER_FOLDS ?= 5
+# `make agent` caps. A turn is one model response; the dollar ceiling is a
+# second backstop with a different failure mode -- thrashing cheaply hits
+# TURNS, reasoning expensively hits BUDGET.
+TURNS ?= 60
+BUDGET ?= 5
+# Quoted so `make note DETAIL="a sentence with spaces"` survives the shell.
+DETAIL_Q = '$(DETAIL)'
 
 .DEFAULT_GOAL := help
 .PHONY: help setup pull review split freeze verify explore tune features ensemble \
-	nested bakeoff bakeoff-decide champion submit test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary bootstrap loop clean distclean
+	nested bakeoff bakeoff-decide permutation champion submit test lint log status next journal receipts audit introspect leakage experiments experiment-open experiment-evaluate experiment-close findings backlog runs summary note agent bootstrap loop clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -130,6 +137,13 @@ loop: explore tune ensemble ## Steps 5-7, repeatable: the autonomous iterate loo
 	@$(PYTHON) -m titanic_agent.runs --summarize
 	@echo "pass $(TITANIC_PASS_ID) complete -- make audit to check the rules held"
 
+# One headless pass, end to end: `claude -p` pointed at the run skill, capped,
+# with its transcript saved beside the rows the pass produced. Deliberately not
+# --permission-mode bypassPermissions: the deny rules in .claude/settings.json
+# are what stop a pass reaching chmod on data/frozen or --score-holdout.
+agent: setup ## One autonomous pass via the run skill. Options: TURNS=60 BUDGET=5
+	@$(PYTHON) -m titanic_agent.agent --turns $(TURNS) --budget $(BUDGET)
+
 runs: setup ## List every pass and how many artifacts it left
 	@$(PYTHON) -m titanic_agent.runs
 
@@ -145,6 +159,13 @@ next: setup ## Just the next incomplete step -- what the `run` skill loops on
 # Make consumes a leading --flag itself, so options are Make VARIABLES.
 # LEVEL=decision shows only what needed a person; PASS=<id> scopes to one pass.
 JOURNAL_ARGS ?= --tail 20
+# Writing to the journal, so an unattended pass can record why it stopped
+# without needing permission to run arbitrary Python. A pass that stops without
+# saying why is indistinguishable from one that crashed.
+note: setup ## Append a journal entry: make note DETAIL="..." EVENT=decision STEP=tune
+	@$(PYTHON) -m titanic_agent.run_log --record $(DETAIL_Q) \
+		$(if $(EVENT),--as-event $(EVENT)) $(if $(STEP),--step $(STEP))
+
 journal: setup ## Agent journal. Options: LEVEL=decision PASS=<run id> ALL=1
 	@$(PYTHON) -m titanic_agent.run_log $(JOURNAL_ARGS) \
 		$(if $(LEVEL),--level $(LEVEL)) $(if $(PASS),--pass-id $(PASS)) $(if $(ALL),--all)

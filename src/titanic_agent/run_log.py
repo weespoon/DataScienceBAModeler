@@ -147,6 +147,15 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Show the agent run journal.")
+    # Writing, not just reading. A headless pass has to be able to record why it
+    # stopped, and the first one could not: `python -c "...run_log.record(...)"`
+    # needs permission to run arbitrary Python, which is too wide a hole to open
+    # (it is also a route to --score-holdout). So the write is its own entry
+    # point, allowlistable on its own.
+    parser.add_argument("--record", default=None, help="append one entry with this detail")
+    parser.add_argument(
+        "--as-event", default="decision", help="event kind for --record (default: decision)"
+    )
     parser.add_argument("--event", default=None, help="filter to one event kind")
     parser.add_argument("--step", default=None, help="filter to one pipeline step")
     parser.add_argument("--pass-id", default=None, help="filter to one loop iteration")
@@ -160,6 +169,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--decisions", action="store_true", help="only what needed a person")
     parser.add_argument("--tail", type=int, default=0, help="show only the last N entries")
     args = parser.parse_args(argv)
+
+    if args.record is not None:
+        entry = record(args.as_event, step=args.step or "", detail=args.record)
+        print(f"journaled {entry['event']}: {entry['detail']}")
+        return 0
 
     minimum = "debug" if args.all else ("decision" if args.decisions else args.level)
     floor = LEVELS.index(minimum)

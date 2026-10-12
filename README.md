@@ -66,12 +66,43 @@ make test      # smoke tests
 make pull      # needs Kaggle credentials -- see .claude/skills/pull/SKILL.md
 make bootstrap # steps 2-4, ONCE: audit, split, seal the data
 make loop      # steps 5-7, repeatable (~18s)
+make agent     # or: one full autonomous experiment, unattended
 make log       # the experiment ledger
 make audit     # did the three rules hold?
 make runs      # every pass and what it left behind
 ```
 
 `make help` lists every target.
+
+## One autonomous pass
+
+```bash
+make agent              # one experiment, start to finish, unattended
+make agent TURNS=90     # options are variables, never flags
+```
+
+`make agent` launches `claude -p` pointed at `.claude/skills/run/SKILL.md`,
+which is the policy for a pass: preflight, pick one item from `make backlog`,
+open an experiment, run the search the item calls for, read the validation
+split once, close with a verdict. One experiment per pass; it stops when that
+experiment closes.
+
+The pass is capped two ways, because they fail differently: `TURNS` bounds a
+pass that thrashes cheaply, `BUDGET` bounds one that reasons expensively. The
+transcript lands in `runs/<pass id>/agent.json` beside the ledger rows the pass
+produced, so "it ran out of turns before closing the experiment" is a checkable
+claim rather than a guess.
+
+It is **not** run with `--permission-mode bypassPermissions`. The deny rules in
+`.claude/settings.json` are what stop an unattended pass reaching `chmod` under
+`data/frozen` or the one route to `--score-holdout`, and a mode that skips the
+permission system skips those too. A denied command is a stop condition: the
+pass reports which one, and `make note` exists so it can record that in the
+journal without permission to run arbitrary Python.
+
+Nothing retries a pass. A wrapper that re-ran one whose verdict it disliked
+would be selecting on the outcome, which is the dishonesty this repo is built
+to detect.
 
 ## Dependencies
 

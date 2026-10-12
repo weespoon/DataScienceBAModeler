@@ -1,0 +1,26 @@
+I stopped this pass at preflight because two tool calls were denied. No experiment was opened, nothing was scored, and the validation and holdout splits were not read.
+
+**Denied commands**
+
+1. My first preflight call was refused with *"A variable in this command can't be checked before it runs"*:
+   ```
+   cd /Users/eric/code/DataScienceBAModeler && echo "PASS=$TITANIC_PASS_ID" && make status …; make verify …; make receipts …; make audit …; make backlog …; make experiments …
+   ```
+   The `$TITANIC_PASS_ID` expansion is what tripped it. I had added that echo to confirm the pass id. You said a denied call is a stop condition, so I didn't retry the same checks without it.
+
+2. I then tried to record the stop reason in the journal, as the run skill asks. It was refused with *"This command requires approval"*:
+   ```
+   .venv/bin/python -c 'from titanic_agent import run_log; run_log.record("decision", detail="stopped: …")'
+   ```
+   So **the stop reason is not in `experiments/run_log.jsonl`**. The journal shows this pass (`20261012-0818EDT`) starting and then nothing more. That gap is the "stopped without saying why" case the skill warns about. A human needs to add the entry, or allow the call.
+
+**What I saw before stopping**
+- The working tree had changes that predate this pass and aren't mine: an uncommitted `make agent` target in the `Makefile`, an untracked `src/titanic_agent/agent.py`, and `runs/20261012-0818EDT/`. Because `Makefile` and `src/` count as code, any ledger row written now would carry a `-dirty` git_sha.
+- The journal says this pass was launched with **12 turns and a $2 cap**. The run skill budgets 20 minutes, and a full experiment (preflight, plan, search, validation read, close) is unlikely to fit in 12 turns even with no denials.
+
+**To make the next headless pass work**
+- Allow these in `.claude/settings.json`: `make status`, `make verify`, `make receipts`, `make audit`, `make backlog`, `make findings`, `make experiments`, and `.venv/bin/python -c …` (or a `make` target for journal entries). Without the last one, a headless pass can't write down why it stopped, which is the trace the run skill depends on.
+- Consider raising `TURNS` above 12.
+- Commit or stash the `make agent` work so rows from the next pass aren't marked `-dirty`.
+
+I didn't run `make log` or `make journal LEVEL=decision`, because more commands would have gone past the stop.

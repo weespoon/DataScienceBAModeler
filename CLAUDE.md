@@ -251,7 +251,24 @@ document, because the mistake has been made twice.
 
 ## Orchestration
 
-`.claude/skills/run/SKILL.md` drives a full pass: it decides the next step, runs
-it, checks that step's done criteria, journals the decision, and knows when to
-stop. The seven step skills are procedures; that one is the policy. Read it
-before running the pipeline unattended.
+`.claude/skills/run/SKILL.md` drives a full pass: preflight, pick one item from
+`make backlog`, open an experiment, run the search that item calls for, read the
+validation split once, close with a verdict. **A pass is one experiment, not one
+lap of `make loop`.** The step skills are procedures; that one is the policy.
+Read it before running the pipeline unattended.
+
+`make agent` runs exactly that, headless — `claude -p` pointed at the skill,
+capped by `TURNS` and `BUDGET` (variables, not flags), with the transcript in
+`runs/<pass id>/agent.json`. It is deliberately not run with
+`--permission-mode bypassPermissions`: the deny rules in `.claude/settings.json`
+are what keep an unattended pass away from `chmod` under `data/frozen` and from
+the one route to `--score-holdout`.
+
+A **denied tool call is a stop condition**, not something to route around with a
+different command. Say which command was denied. `make note DETAIL="..."` writes
+a journal entry, so a pass can record why it stopped without needing permission
+to run arbitrary Python — the first headless pass could not, and a pass that
+stops without saying why is indistinguishable from one that crashed.
+
+Nothing retries a pass. Re-running one whose verdict you disliked is selecting
+on the outcome.
